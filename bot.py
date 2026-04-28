@@ -4406,35 +4406,47 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         return True
 
     if step == "mentor_timetable_date":
-        # Handle "Change Timetable" button if they just saw it
-        if text == "Change Timetable":
+        # Handle Yes/No for existing timetable
+        if text in ["Yes", "No"]:
             temp = get_mentorship_temp(u)
-            text = temp.get("timetable_target_date") # Reuse the date we just validated
-            # Flow continues below as if they just sent the date
-        
+            if text == "Yes":
+                target_date = temp.get("timetable_target_date")
+                day_name = temp.get("timetable_target_day")
+                upd_user(uid, {"step": "mentor_daily_timetable_update"})
+                await update.message.reply_text(
+                    f"📝 {target_date} ({day_name}) ka timetable bhejiye.\n"
+                    "Example: Physics 9 am, Chemistry 11 am. Agar class nahi hai toh 'Off'.",
+                    reply_markup=ReplyKeyboardMarkup([["Off"], ["Back", "Ask Doubt"]], resize_keyboard=True)
+                )
+                return True
+            else:
+                upd_user(uid, {"step": "mentor_ready"})
+                await update.message.reply_text("Theek hai! Dashboard par wapas chalte hain.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True))
+                return True
+
         try:
             d = datetime.strptime(text, "%d/%m/%Y")
             d_date = d.date()
             day_name = d.strftime("%A")
             
             # Check if timetable already exists for this day
-            student = student or get_student(u.get("mentorship_student_id"))
+            student = get_student(u.get("mentorship_student_id"))
             c = db(); cur = db_cursor(c)
             cur.execute("SELECT id FROM weekly_timetable WHERE student_id=%s AND day_of_week=%s", (student["id"], day_name))
             exists = cur.fetchone()
             c.close()
             
-            if exists and text != "Change Timetable": # If they didn't just click the button
+            if exists:
                 temp = get_mentorship_temp(u)
                 temp["timetable_target_date"] = text
                 temp["timetable_target_day"] = day_name
                 save_mentorship_temp(uid, temp)
                 
                 await update.message.reply_text(
-                    f"📋 {text} ({day_name}) ke liye pehle se timetable saved hai.\n\nKya aap ise badalna (change) chahte hain?",
-                    reply_markup=ReplyKeyboardMarkup(TIMETABLE_CHANGE_OPTIONS, resize_keyboard=True)
+                    f"📋 {text} ({day_name}) ke liye pehle se timetable saved hai.\n\n"
+                    "Kya aap ise badalna (change) chahte hain?",
+                    reply_markup=ReplyKeyboardMarkup([["Yes", "No"], ["Back"]], resize_keyboard=True)
                 )
-                # Keep step as mentor_timetable_date to handle the button
                 return True
 
             temp = get_mentorship_temp(u)
@@ -4449,8 +4461,7 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
                 reply_markup=ReplyKeyboardMarkup([["Off"], ["Back", "Ask Doubt"]], resize_keyboard=True)
             )
         except ValueError:
-            if text != "Change Timetable":
-                await update.message.reply_text("❌ Invalid format. Please use DD/MM/YYYY (e.g., 28/04/2026).")
+            await update.message.reply_text("❌ Invalid format. Please use DD/MM/YYYY (e.g., 28/04/2026).")
         return True
 
     if step == "mentor_daily_timetable_update":
