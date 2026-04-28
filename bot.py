@@ -2627,27 +2627,31 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     data = query.data
     await query.answer()
 
-    if data.startswith("verify_parent_"):
-        pass # Existing logic handled below
-    elif data.startswith("ml_approve_") or data.startswith("ml_reject_"):
-        parts = data.split("_")
-        action = parts[1] # approve or reject
-        student_id = parts[2]
-        leave_date = parts[3]
-        
-        status = "approved" if action == "approve" else "rejected"
-        upsert_medical_leave(student_id, leave_date, {"status": status, "updated_at": now_iso()})
-        
-        student = get_student(student_id)
-        if student:
-            try:
-                msg = "✅ Aapki medical leave approve ho gayi hai! Kal aapko koi task assign nahi kiya jayega. Rest well! 🏥" if status == "approved" else "❌ Aapki medical leave request reject ho gayi hai. Please regular timetable follow karein."
-                await context.bot.send_message(chat_id=int(student["telegram_id"]), text=msg)
-            except Exception as e:
-                logger.error(f"Failed to notify student {student_id} about leave {status}: {e}")
-        
-        status_symbol = "✅" if status == "approved" else "❌"
-        await query.edit_message_text(f"{status_symbol} Medical Leave {status.title()} | By @{query.from_user.username or query.from_user.id}\n\nStudent ID: {student_id}\nDate: {leave_date}")
+    if data.startswith("ml_approve_") or data.startswith("ml_reject_"):
+        try:
+            parts = data.split("_")
+            action = parts[1]
+            student_id = parts[2]
+            leave_date = parts[3]
+            
+            status = "approved" if action == "approve" else "rejected"
+            logger.info(f"Processing leave {status} for student {student_id} on {leave_date}")
+            
+            upsert_medical_leave(student_id, leave_date, {"status": status, "updated_at": now_iso()})
+            
+            student = get_student(student_id)
+            if student:
+                try:
+                    msg = "✅ Aapki medical leave approve ho gayi hai! Kal aapko koi task assign nahi kiya jayega. Rest well! 🏥" if status == "approved" else "❌ Aapki medical leave request reject ho gayi hai. Please regular timetable follow karein."
+                    await context.bot.send_message(chat_id=int(student["telegram_id"]), text=msg)
+                except Exception as e:
+                    logger.error(f"Failed to notify student {student_id}: {e}")
+            
+            status_symbol = "✅" if status == "approved" else "❌"
+            await query.edit_message_text(f"{status_symbol} Medical Leave {status.title()} | By @{query.from_user.username or query.from_user.id}\n\nStudent: {student.get('name') if student else student_id}\nDate: {leave_date}")
+        except Exception as e:
+            logger.error(f"Error in medical leave callback: {e}")
+            await query.edit_message_text(f"❌ Error processing approval: {str(e)[:100]}")
         return
 
     if data.startswith("verify_parent_"):
