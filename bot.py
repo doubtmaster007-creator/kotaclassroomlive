@@ -2169,6 +2169,11 @@ def update_task(task_id: str, fields: Dict[str, Any]):
     cur.execute(f"UPDATE tasks SET {', '.join([k+'=%s' for k in ks])} WHERE id=%s", vs + [task_id])
     c.commit(); c.close()
 
+def delete_pending_tasks_for_day(student_id: str, scheduled_date: date):
+    c = db(); cur = db_cursor(c)
+    cur.execute("DELETE FROM tasks WHERE student_id=%s AND scheduled_date=%s AND status='pending'", (student_id, scheduled_date))
+    c.commit(); c.close()
+
 def get_student_tasks(student_id: str, statuses: Optional[List[str]] = None, scheduled_date=None) -> List[Dict[str, Any]]:
     c = db(); cur = db_cursor(c)
     query = "SELECT * FROM tasks WHERE student_id=%s"
@@ -4192,6 +4197,7 @@ async def generate_ai_task_planner(update, context, student):
         await update.message.reply_text("AI Task Planner generation failed. Using fallback plan.")
         planner = {"tasks": [{"type": "HW", "subject": "General", "topic": "Homework", "description": "Complete all submitted homework", "priority": "critical", "estimated_minutes": 180, "source": "CLASS", "scheduled_slot_label": "Study Slot"}]}
 
+    delete_pending_tasks_for_day(student["id"], today_ist_date())
     log = get_or_create_daily_log(student["id"], today_ist_date())
     created_lines = []
     for item in planner.get("tasks", []):
@@ -4835,6 +4841,7 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
             await update.message.reply_text("Please choose: Yes, I'm Ready or No, keep it light.", reply_markup=ReplyKeyboardMarkup([["Yes, I'm Ready", "No, keep it light"], ["Back"]], resize_keyboard=True))
             return True
 
+        delete_pending_tasks_for_day(student["id"], today_ist_date())
         log = get_or_create_daily_log(student["id"], today_ist_date())
         created_lines = []
         for item in tasks_to_create:
@@ -4961,6 +4968,7 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
                 )
                 return True
 
+            delete_pending_tasks_for_day(student["id"], today_ist_date())
             log = get_or_create_daily_log(student["id"], today_ist_date())
             created_lines = []
             for item in planner.get("tasks", []):
