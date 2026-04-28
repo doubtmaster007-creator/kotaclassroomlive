@@ -92,7 +92,11 @@ MENTORSHIP_GROUP_ID = int(os.getenv("MENTORSHIP_GROUP_ID", str(GROUP_CHAT_ID)))
 MENTORSHIP_CHECK_SECONDS = 60
 PLANNER_MODEL = os.getenv("MENTORSHIP_MODEL", MODEL_HAIKU)
 
-MENTORSHIP_CLEAN_MENU = [["Show Mentorship Progress", "Start Mentorship Flow"], ["Back", "Ask Doubt"]]
+MENTORSHIP_CLEAN_MENU = [
+    ["Show Mentorship Progress", "Update HW"],
+    ["Start Mentorship Flow", "Back"],
+    ["Ask Doubt"]
+]
 TIMETABLE_CHANGE_OPTIONS = [["Change Timetable"], ["Back", "Ask Doubt"]]
 
 SUMMARY_MENU = [["Weekly Summary", "Monthly Summary"], ["Back", "Ask Doubt"]]
@@ -5596,6 +5600,23 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     elif text == "My Mentorship":
         await mentorship(update, context)
+        return
+    elif text == "Update HW":
+        student = get_student_by_telegram(uid)
+        if not student: return
+        # Get today's classes
+        timetable = get_weekday_timetable(student["id"], weekday_name(today_ist()))
+        if not timetable or not timetable.get("slots"):
+            await update.message.reply_text("❌ Aaj ke liye koi classes scheduled nahi hain. Pehle 'Timetable Input' dein.")
+            return
+        
+        subjects = [s.get("subject") for s in timetable.get("slots", []) if s.get("type") == "class"]
+        if not subjects:
+            await update.message.reply_text("❌ Aaj koi subject classes nahi hain.")
+            return
+        
+        upd_user(uid, {"step": "sequential_hw", "sequential_hw_index": 0, "sequential_hw_data": {}})
+        await ask_next_sequential_hw(update, context, student, subjects, 0)
         return
     elif text == "Show Mentorship Progress":
         student = get_student_by_telegram(uid)
