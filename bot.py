@@ -4768,7 +4768,6 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         )
         return True
 
-    if step == "backlog_difficulty":
 
     if step == "mentor_extra_task_ask":
         if text == "Yes":
