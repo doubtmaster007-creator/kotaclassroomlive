@@ -6,7 +6,7 @@ import asyncio
 import traceback
 import logging
 from pathlib import Path
-from datetime import datetime, timedelta, UTC, timezone
+from datetime import datetime, timedelta, UTC, timezone, date
 from typing import Optional, Dict, Any, List, Tuple
 from threading import Thread
 
