@@ -113,6 +113,9 @@ BACKLOG_SUBMENU_KB = [
     ["Back", "Ask Doubt"]
 ]
 
+# Backlog target level options
+BACKLOG_LEVEL_OPTIONS = [["Board", "JEE Mains"], ["JEE Adv", "NEET"], ["Back"]]
+
 # Preferred study time slots (Issue #7)
 PREFERRED_TIME_SLOTS = [
     ["Morning", "Evening"],
@@ -132,8 +135,8 @@ Important rules:
    - HW from today's class
    - Notes revision from today's class
 2. Then include pending tasks that are 3 days old or less.
-3. If any pending task exists, do not create any extra improvement task.
-4. If test_week is true, do not create any extra improvement task.
+3. If time permits, include backlog tasks based on their target_level (e.g., JEE Adv needs more depth), completion_days, and hours_per_day.
+4. If any pending task exists, do not create any extra improvement task.
 5. Same-day incomplete or skipped tasks must not affect the timing of other same-day tasks.
 6. Use only the provided free slots and available time.
 7. Do not invent subjects, topics, deadlines, syllabus, or performance details.
@@ -1732,13 +1735,16 @@ def init_db():
                 subject VARCHAR(255),
                 topic VARCHAR(255),
                 difficulty VARCHAR(50),
+                target_level VARCHAR(50),
+                completion_days INT,
+                hours_per_day VARCHAR(50),
                 dedicated_time VARCHAR(255),
                 status VARCHAR(50) DEFAULT 'pending',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
         # Migration for backlogs
-        for col, col_type in [("subject", "VARCHAR(255)"), ("topic", "VARCHAR(255)"), ("difficulty", "VARCHAR(50)"), ("dedicated_time", "VARCHAR(255)"), ("status", "VARCHAR(50) DEFAULT 'pending'")]:
+        for col, col_type in [("subject", "VARCHAR(255)"), ("topic", "VARCHAR(255)"), ("difficulty", "VARCHAR(50)"), ("target_level", "VARCHAR(50)"), ("completion_days", "INT"), ("hours_per_day", "VARCHAR(50)"), ("dedicated_time", "VARCHAR(255)"), ("status", "VARCHAR(50) DEFAULT 'pending'")]:
             try:
                 c.execute(f"ALTER TABLE backlogs ADD COLUMN IF NOT EXISTS {col} {col_type}")
             except:
@@ -1852,6 +1858,9 @@ def init_db():
         ensure_column_pg(conn, "backlogs", "subject", "VARCHAR(255)")
         ensure_column_pg(conn, "backlogs", "topic", "VARCHAR(255)")
         ensure_column_pg(conn, "backlogs", "difficulty", "VARCHAR(50)")
+        ensure_column_pg(conn, "backlogs", "target_level", "VARCHAR(50)")
+        ensure_column_pg(conn, "backlogs", "completion_days", "INT")
+        ensure_column_pg(conn, "backlogs", "hours_per_day", "VARCHAR(50)")
         ensure_column_pg(conn, "backlogs", "dedicated_time", "VARCHAR(255)")
         ensure_column_pg(conn, "backlogs", "status", "VARCHAR(50) DEFAULT 'pending'")
         
@@ -3481,7 +3490,7 @@ async def send_ticket_to_teacher_dm(context: ContextTypes.DEFAULT_TYPE, teacher_
             text=f"--- AI ka jawab (reference ke liye) ---\n\n{ai_answer}"
         )
 
-def build_day_plan_payload(student: Dict[str, Any], subject: str, hw_text: str, free_slots: List[Dict[str, Any]], pending_tasks: List[Dict[str, Any]], test_week: Optional[Dict[str, Any]], mentor_instruction: Optional[str]) -> Dict[str, Any]:
+def build_day_plan_payload(student: Dict[str, Any], subject: str, hw_text: str, free_slots: List[Dict[str, Any]], pending_tasks: List[Dict[str, Any]], test_week: Optional[Dict[str, Any]], mentor_instruction: Optional[str], backlogs: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     return {
         "student": mentor_payload(student),
         "today_subject": subject,
@@ -3504,6 +3513,16 @@ def build_day_plan_payload(student: Dict[str, Any], subject: str, hw_text: str, 
             "chemistry": (test_week or {}).get("chemistry_syllabus"),
             "mathematics": (test_week or {}).get("mathematics_syllabus"),
         },
+        "backlogs": [
+            {
+                "subject": b.get("subject"),
+                "topic": b.get("topic"),
+                "target_level": b.get("target_level"),
+                "completion_days": b.get("completion_days"),
+                "hours_per_day": b.get("hours_per_day")
+            }
+            for b in (backlogs or [])
+        ],
         "mentor_instruction": mentor_instruction or "",
     }
 
@@ -4117,7 +4136,8 @@ async def generate_ai_task_planner(update, context, student):
         free_slots, 
         get_pending_tasks_upto_days(student["id"], 3), 
         get_test_week(student["id"], next_monday), 
-        temp.get("mentor_instruction")
+        temp.get("mentor_instruction"),
+        get_backlogs(student["id"], ["pending"])
     )
     
     try:
@@ -4655,7 +4675,7 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         free_slots = (timetable or {}).get("free_slots") or []
         
         next_monday = today_ist_date() - timedelta(days=today_ist_date().weekday())
-        payload = build_day_plan_payload(student, "Pending Work", f"Complete pending tasks before medical leave", free_slots, pending_tasks, get_test_week(student["id"], next_monday), "Medical leave tomorrow - clear pending work today")
+        payload = build_day_plan_payload(student, "Pending Work", f"Complete pending tasks before medical leave", free_slots, pending_tasks, get_test_week(student["id"], next_monday), "Medical leave tomorrow - clear pending work today", get_backlogs(student["id"], ["pending"]))
         
         try:
             planner = call_json_prompt(DAILY_TASK_PLANNER_PROMPT, payload)
@@ -4692,41 +4712,63 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         )
         return True
 
-    if step == "backlog_difficulty":
-        if text not in {"Easy", "Medium", "Hard"}:
-            await update.message.reply_text("Please choose: Easy, Medium, or Hard.", reply_markup=ReplyKeyboardMarkup([["Easy", "Medium", "Hard"], ["Back"]], resize_keyboard=True))
-            return True
-        
-        temp["current_backlog_difficulty"] = text
-        save_mentorship_temp(uid, temp)
-        upd_user(uid, {"step": "backlog_time"})
-        await update.message.reply_text("Bataiye, aap kitne ghante is topic ke liye dedicate kar sakte hain? (e.g., 2 hours)", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True))
-        return True
-
-    if step == "backlog_time":
+    if step == "backlog_target_level":
         if text.lower() == "back":
-            upd_user(uid, {"step": "backlog_difficulty"})
-            await update.message.reply_text("Bataiye, ye topic aapke liye kitna difficult hai?", reply_markup=ReplyKeyboardMarkup([["Easy", "Medium", "Hard"], ["Back"]], resize_keyboard=True))
+            upd_user(uid, {"step": "entering_new_backlogs"})
+            await update.message.reply_text("📝 Naya backlog enter karo\n\nFormat: Subject - Topic", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True))
             return True
             
-        temp["current_backlog_time"] = text
-        save_mentorship_temp(uid, temp)
+        allowed = {"Board", "JEE Mains", "JEE Adv", "NEET"}
+        if text not in allowed:
+            await update.message.reply_text("Please choose: Board, JEE Mains, JEE Adv, or NEET.", reply_markup=ReplyKeyboardMarkup(BACKLOG_LEVEL_OPTIONS, resize_keyboard=True))
+            return True
         
-        # Here we could trigger AI plan generation for backlog, but for now we'll just save it.
-        # Issue #9: After backlog submitted, bot says "I'll help you complete this"
+        temp["current_backlog_target"] = text
+        save_mentorship_temp(uid, temp)
+        upd_user(uid, {"step": "backlog_days"})
+        await update.message.reply_text("Bataiye, aap ise kitne dino mein complete karna chahte hain?", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True))
+        return True
+
+    if step == "backlog_days":
+        if text.lower() == "back":
+            upd_user(uid, {"step": "backlog_target_level"})
+            await update.message.reply_text("Bataiye, aapko ye topic kis level pe prepare karna hai?", reply_markup=ReplyKeyboardMarkup(BACKLOG_LEVEL_OPTIONS, resize_keyboard=True))
+            return True
+        
+        try:
+            days = int(re.sub(r"\D", "", text))
+            temp["current_backlog_days"] = days
+            save_mentorship_temp(uid, temp)
+            upd_user(uid, {"step": "backlog_hours_per_day"})
+            await update.message.reply_text("Everyday kitne hours dedicate kar sakte ho?", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True))
+        except:
+            await update.message.reply_text("Please enter a valid number of days (e.g., 5).")
+        return True
+
+    if step == "backlog_hours_per_day":
+        if text.lower() == "back":
+            upd_user(uid, {"step": "backlog_days"})
+            await update.message.reply_text("Bataiye, aap ise kitne dino mein complete karna chahte hain?", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True))
+            return True
+            
         backlog_id = u.get("current_backlog_id")
         if backlog_id:
             c = db(); cur = db_cursor(c)
-            cur.execute("UPDATE backlogs SET difficulty=%s, dedicated_time=%s WHERE id=%s", (temp.get("current_backlog_difficulty"), text, backlog_id))
+            cur.execute(
+                "UPDATE backlogs SET target_level=%s, completion_days=%s, hours_per_day=%s WHERE id=%s", 
+                (temp.get("current_backlog_target"), temp.get("current_backlog_days"), text, backlog_id)
+            )
             c.commit(); c.close()
             
         upd_user(uid, {"step": "mentor_ready"})
         await update.message.reply_text(
-            "✅ Noted! Main aapke daily task plan mein is backlog ko cover karne ke liye space banaunga.\n\n"
+            "✅ Noted! Main aapka customized daily plan banaunga aur roj uska update bhi lunga.\n\n"
             "I'll help you complete this! 💪",
             reply_markup=ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True)
         )
         return True
+
+    if step == "backlog_difficulty":
 
     if step == "mentor_extra_task_ask":
         if text == "Yes":
@@ -4803,7 +4845,7 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
             timetable = get_weekday_timetable(student["id"], weekday_name(today_ist()))
             free_slots = (timetable or {}).get("free_slots") or []
             next_monday = today_ist_date() - timedelta(days=today_ist_date().weekday())
-            payload = build_day_plan_payload(student, slot_info.get("subject", "General"), text, free_slots, get_pending_tasks_upto_days(student["id"], 3), get_test_week(student["id"], next_monday), temp.get("mentor_instruction"))
+            payload = build_day_plan_payload(student, slot_info.get("subject", "General"), text, free_slots, get_pending_tasks_upto_days(student["id"], 3), get_test_week(student["id"], next_monday), temp.get("mentor_instruction"), get_backlogs(student["id"], ["pending"]))
             try:
                 planner = call_json_prompt(DAILY_TASK_PLANNER_PROMPT, payload)
             except Exception:
@@ -5587,15 +5629,15 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             backlog = cur.fetchone() # Already a dict due to RealDictCursor
             c.commit(); c.close()
             
-            upd_user(uid, {"step": "backlog_difficulty", "current_backlog_id": backlog["id"]})
+            upd_user(uid, {"step": "backlog_target_level", "current_backlog_id": backlog["id"]})
             
             await update.message.reply_text(
                 f"✅ Backlog saved!\n\n"
                 f"📚 Subject: {subject}\n"
                 f"📖 Topic: {topic}\n\n"
                 f"Main aapki madad karunga ise complete karne mein! 💪\n\n"
-                f"Bataiye, ye topic aapke liye kitna difficult hai?",
-                reply_markup=ReplyKeyboardMarkup([["Easy", "Medium", "Hard"], ["Back"]], resize_keyboard=True)
+                f"Bataiye, aapko ye topic kis level pe prepare karna hai?",
+                reply_markup=ReplyKeyboardMarkup(BACKLOG_LEVEL_OPTIONS, resize_keyboard=True)
             )
             return
         except Exception as e:
