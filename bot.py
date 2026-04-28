@@ -1868,6 +1868,7 @@ def init_db():
         
         ensure_column_pg(conn, "medical_leaves", "student_requested", "BOOLEAN DEFAULT false")
         ensure_column_pg(conn, "medical_leaves", "auto_cancel_time", "TIMESTAMP")
+        ensure_column_pg(conn, "medical_leaves", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
         
         c.close()
         conn.close()
