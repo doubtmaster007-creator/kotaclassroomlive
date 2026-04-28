@@ -5086,7 +5086,7 @@ async def reset_registration_command(update: Update, context: ContextTypes.DEFAU
                 mentorship_mode='none', 
                 mentorship_student_id=NULL, 
                 mentorship_temp=NULL 
-            WHERE telegram_id=%s
+            WHERE user_id=%s
         """, (uid,))
         c.commit()
         await update.message.reply_text("✅ Reset successful! Aapke account ko mentorship se unlink kar diya gaya hai. Fresh start ke liye /start type karein.")
