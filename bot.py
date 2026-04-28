@@ -3955,17 +3955,26 @@ def start_mentorship_scheduler(bot):
     mentorship_scheduler_task = asyncio.create_task(run_mentorship_scheduler(bot))
 
 async def mentorship(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.message.from_user.id
-    student = get_student_by_telegram(uid)
-    
-    if student:
-        if student.get("is_approved"):
-            await update.message.reply_text(
-                "📈 Welcome to My Mentorship!\n\nSelect an option below to view your progress or manage your day:", 
-                reply_markup=ReplyKeyboardMarkup(MENTORSHIP_CLEAN_MENU, resize_keyboard=True)
-            )
-        else:
-            await update.message.reply_text("⏳ Aapki registration processing mein hai.\n\nMentor jald hi approve karenge. Tab tak AI Doubt Solver use karein.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
+    try:
+        uid = update.message.from_user.id
+        logger.info(f"Mentorship accessed by {uid}")
+        student = get_student_by_telegram(uid)
+        
+        if student:
+            logger.info(f"Student found: {student.get('name')} | Approved: {student.get('is_approved')}")
+            if student.get("is_approved"):
+                await update.message.reply_text(
+                    "📈 Welcome to My Mentorship!\n\nSelect an option below to view your progress or manage your day:", 
+                    reply_markup=ReplyKeyboardMarkup(MENTORSHIP_CLEAN_MENU, resize_keyboard=True)
+                )
+            else:
+                await update.message.reply_text("⏳ Aapki registration processing mein hai.\n\nMentor jald hi approve karenge. Tab tak AI Doubt Solver use karein.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
+            return
+        
+        logger.info(f"No student found for {uid}, checking user record...")
+    except Exception as e:
+        logger.error(f"Error in mentorship function: {e}")
+        await update.message.reply_text(f"⚠️ Mentorship menu load karne mein error aaya. Please try again later. (Error: {str(e)[:50]})")
         return
 
     # Smart Check: Use existing profile if available
