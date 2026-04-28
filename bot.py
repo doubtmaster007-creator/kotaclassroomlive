@@ -5887,11 +5887,6 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             upd_user(uid, {"step": "mentor_ready"})
             await update.message.reply_text("Wapas My Mentorship par 👇", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True))
             return
-
-        # Fallback global Back button
-        upd_user(uid, {"step":"ready_for_new_doubt", "awaiting_feedback":0, "awaiting_no_choice":0, "awaiting_rating":0})
-        await update.message.reply_text("Main menu par wapas. 👇", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
-        return
         if step == "mentor_testweek_chemistry":
             upd_user(uid, {"step": "mentor_testweek_physics"})
             await update.message.reply_text("Physics test syllabus bhejo.", reply_markup=ReplyKeyboardMarkup([["Back", "Ask Doubt"]], resize_keyboard=True))
@@ -5936,6 +5931,11 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             u2 = get_user(uid)
             await update.message.reply_text("Peeche Chapter par wapas 👇", reply_markup=ReplyKeyboardMarkup(chapter_kb(u2), resize_keyboard=True))
             return
+
+        # Fallback global Back button
+        upd_user(uid, {"step":"ready_for_new_doubt", "awaiting_feedback":0, "awaiting_no_choice":0, "awaiting_rating":0})
+        await update.message.reply_text("Main menu par wapas. 👇", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
+        return
 
     if contains_abuse_words(incoming):
         v = int(u["violation_count"]) + 1
