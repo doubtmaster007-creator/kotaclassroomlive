@@ -96,7 +96,10 @@ MENTORSHIP_CLEAN_MENU = [["Show Mentorship Progress", "Start Mentorship Flow"], 
 TIMETABLE_CHANGE_OPTIONS = [["Change Timetable"], ["Back", "Ask Doubt"]]
 
 SUMMARY_MENU = [["Weekly Summary", "Monthly Summary"], ["Back", "Ask Doubt"]]
-OTHERS_MENU = [["Medical Leave", "Send me Summary"], ["Back", "Ask Doubt"]]
+OTHERS_MENU = [
+    ["Medical Leave", "Send me Summary"],
+    ["Bot Guide", "Back"]
+]
 BACKLOGS_MENU = [["Check Backlogs", "Add Backlogs"], ["Back", "Ask Doubt"]]
 
 # Button names update (Issue #2, #5, #6, #9)
@@ -5696,6 +5699,23 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Issue #6: Back button takes to main menu while preserving previous data
         upd_user(uid, {"step":"ready_for_new_doubt", "awaiting_feedback":0, "awaiting_no_choice":0, "awaiting_rating":0})
         await update.message.reply_text("Main menu par wapas. 👇", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
+        return
+    elif text == "Bot Guide":
+        guide_text = (
+            "🚀 *JEE Mentorship Bot Guide*\n"
+            "━━━━━━━━━━━━━━━━━━\n\n"
+            "✨ *Main Tabs:*\n"
+            "• *Ask Doubt*: Direct AI & Teacher doubt solving flow.\n"
+            "• *My Mentorship*: Aapka complete study management system.\n"
+            "• *Backlogs*: Manage your old pending topics with AI scheduling.\n\n"
+            "📅 *Mentorship Features:*\n"
+            "• *Timetable Input*: Roz ki coaching aur HW details dein taaki AI aapka daily plan bana sake.\n"
+            "• *Show Progress*: Aaj ka task completion aur consistency score dekhein.\n"
+            "• *Medical Leave*: Emergency mein leave request bhejien approval ke liye.\n"
+            "• *Send me Summary*: Apne performance ki AI-generated weekly/monthly report paayein.\n\n"
+            "💡 *Tip*: Pehle HW send karein, fir AI aapka daily plan banayega!"
+        )
+        await update.message.reply_text(guide_text, parse_mode="Markdown", reply_markup=ReplyKeyboardMarkup(OTHERS_MENU, resize_keyboard=True))
         return
     elif text == "Timetable Input":
         await timetable_command(update, context)
