@@ -1824,6 +1824,7 @@ def init_db():
         ensure_column_pg(conn, "users", "mentorship_mode", "VARCHAR(50) DEFAULT 'none'")
         ensure_column_pg(conn, "users", "mentorship_temp", "TEXT")
         ensure_column_pg(conn, "users", "mentorship_student_id", "UUID")
+        ensure_column_pg(conn, "users", "current_backlog_id", "INT")
         
         ensure_column_pg(conn, "students", "mentor_id_telegram", "TEXT")
         ensure_column_pg(conn, "students", "phone_verified", "BOOLEAN DEFAULT false")
