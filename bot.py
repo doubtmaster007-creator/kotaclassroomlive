@@ -5591,19 +5591,41 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not student: return
         today = today_ist_date()
         tasks = get_student_tasks(student["id"], scheduled_date=today)
-        completion = calculate_completion_percentage(tasks)
-        pending_count = sum(1 for t in tasks if t.get("status") == "pending")
-        dashboard_text = (
-            f"📊 *Mentorship Progress*\n"
-            f"━━━━━━━━━━━━━━━━━━\n"
-            f"👤 Student: {student['name']}\n"
-            f"🎯 Goal: {student.get('exam_target', 'JEE')}\n"
-            f"📅 Date: {today.strftime('%d %b %Y')}\n\n"
-            f"✅ Aaj ka kaam: {completion}%\n"
-            f"⏳ Pending Tasks: {pending_count}\n"
-            f"💪 Consistency Score: {student.get('consistency_score', 0)}%\n\n"
-            f"Aap bahut acha kar rahe ho, bas lage raho! Happy learning with MP Sir! ✨"
-        )
+        
+        if not tasks:
+            dashboard_text = (
+                f"📊 *Mentorship Progress*\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"👤 Student: {student['name']}\n"
+                f"🎯 Goal: {student.get('exam_target', 'JEE')}\n"
+                f"📅 Date: {today.strftime('%d %b %Y')}\n\n"
+                f"⏸️ *Status: Inactive*\n"
+                f"Aaj ke liye koi tasks scheduled nahi hain. Homework send karein plan activate karne ke liye! ✨"
+            )
+        else:
+            completion = calculate_completion_percentage(tasks)
+            pending_tasks = [t for t in tasks if t.get("status") == "pending"]
+            pending_count = len(pending_tasks)
+            
+            pending_list_str = ""
+            if pending_tasks:
+                pending_list_str = "\n⏳ *Pending Tasks:*\n"
+                for idx, t in enumerate(pending_tasks, 1):
+                    pending_list_str += f"{idx}. {t.get('subject')} - {t.get('topic')}\n"
+            
+            dashboard_text = (
+                f"📊 *Mentorship Progress*\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"👤 Student: {student['name']}\n"
+                f"🎯 Goal: {student.get('exam_target', 'JEE')}\n"
+                f"📅 Date: {today.strftime('%d %b %Y')}\n\n"
+                f"✅ Aaj ka kaam: {completion}%\n"
+                f"⏳ Total Pending: {pending_count}\n"
+                f"{pending_list_str}\n"
+                f"💪 Consistency Score: {student.get('consistency_score', 0)}%\n\n"
+                f"Aap bahut acha kar rahe ho, bas lage raho! Happy learning with MP Sir! ✨"
+            )
+            
         await update.message.reply_text(dashboard_text, parse_mode="Markdown", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_CLEAN_MENU, resize_keyboard=True))
         return
     elif text == "Start Mentorship Flow":
