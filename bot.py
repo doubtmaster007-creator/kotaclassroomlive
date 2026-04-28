@@ -1844,7 +1844,9 @@ def init_db():
 
         ensure_column_pg(conn, "backlogs", "subject", "VARCHAR(255)")
         ensure_column_pg(conn, "backlogs", "topic", "VARCHAR(255)")
-        ensure_column_pg(conn, "backlogs", "status", "VARCHAR(50)")
+        ensure_column_pg(conn, "backlogs", "difficulty", "VARCHAR(50)")
+        ensure_column_pg(conn, "backlogs", "dedicated_time", "VARCHAR(255)")
+        ensure_column_pg(conn, "backlogs", "status", "VARCHAR(50) DEFAULT 'active'")
         
         c.close()
         conn.close()
@@ -5571,11 +5573,11 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Create backlog entry
             c = db(); cur = db_cursor(c)
             cur.execute(
-                """INSERT INTO backlogs (student_id, subject, topic, status, created_at)
-                   VALUES (%s, %s, %s, %s, %s) RETURNING *""",
-                (student["id"], subject, topic, "active", now_iso())
+                """INSERT INTO backlogs (student_id, subject, topic, status)
+                   VALUES (%s, %s, %s, %s) RETURNING *""",
+                (student["id"], subject, topic, "active")
             )
-            backlog = dict(cur.fetchone())
+            backlog = cur.fetchone() # Already a dict due to RealDictCursor
             c.commit(); c.close()
             
             upd_user(uid, {"step": "backlog_difficulty", "current_backlog_id": backlog["id"]})
@@ -5590,9 +5592,9 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         except Exception as e:
-            logger.error(f"Error saving backlog: {e}")
+            logger.error(f"Error saving backlog: {e}", exc_info=True)
             await update.message.reply_text(
-                "Error saving backlog. Please try again.",
+                f"❌ Error saving backlog: {str(e)[:100]}\nPlease try again.",
                 reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True)
             )
             return
