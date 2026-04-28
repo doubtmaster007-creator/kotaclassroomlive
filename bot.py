@@ -4198,13 +4198,7 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
             d = datetime.strptime(text, "%d/%m/%Y")
             d_date = d.date()
             day_name = d.strftime("%A")
-            now_ist = today_ist()
             
-            # Constraint: 2 AM Cutoff for current day
-            if d_date == now_ist.date() and now_ist.hour >= 2:
-                await update.message.reply_text("⚠️ Aaj ka timetable 2:00 AM ke baad update nahi kiya ja sakta. Kal ka timetable update karein.")
-                return True
-                
             # Check if timetable already exists for this day
             student = student or get_student(u.get("mentorship_student_id"))
             c = db(); cur = db_cursor(c)
@@ -5072,29 +5066,6 @@ async def handle_uturn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     upd_user(uid, {"step":"ready_for_new_doubt", "awaiting_feedback":0, "awaiting_no_choice":0, "awaiting_rating":0})
     await update.message.reply_text("Flow reset kar diya gaya hai. Wapas menu par 👇", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
 
-async def reset_registration_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.message.from_user.id
-    if update.message.chat.id == GROUP_CHAT_ID: return
-    
-    c = db(); cur = db_cursor(c)
-    try:
-        # Safe Detach: We just clear the pointers in the users table.
-        # This makes the user "new" for the bot without deleting historical data.
-        cur.execute("""
-            UPDATE users 
-            SET step='ready_for_new_doubt', 
-                mentorship_mode='none', 
-                mentorship_student_id=NULL, 
-                mentorship_temp=NULL 
-            WHERE user_id=%s
-        """, (uid,))
-        c.commit()
-        await update.message.reply_text("✅ Reset successful! Aapke account ko mentorship se unlink kar diya gaya hai. Fresh start ke liye /start type karein.")
-    except Exception as e:
-        logger.error(f"Reset error: {e}")
-        await update.message.reply_text(f"❌ Reset failed: {str(e)[:100]}")
-    finally:
-        c.close()
 
 async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.chat.id == GROUP_CHAT_ID:
@@ -6366,8 +6337,6 @@ def main():
     app.add_handler(CommandHandler("uturn", handle_uturn), group=0)
 
     app.add_handler(CallbackQueryHandler(handle_callback_query), group=0)
-    app.add_handler(CommandHandler("resetregistration", reset_registration_command))
-    
     app.add_handler(MessageHandler(filters.Chat(GROUP_CHAT_ID) & non_command_messages, handle_group_reply), group=0)
     app.add_handler(MessageHandler(filters.ChatType.PRIVATE & non_command_messages, handle_teacher_dm), group=0)
     app.add_handler(MessageHandler(non_command_messages & ~filters.Chat(GROUP_CHAT_ID), handle_user), group=1)
