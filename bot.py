@@ -5036,6 +5036,45 @@ async def handle_uturn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     upd_user(uid, {"step":"ready_for_new_doubt", "awaiting_feedback":0, "awaiting_no_choice":0, "awaiting_rating":0})
     await update.message.reply_text("Flow reset kar diya gaya hai. Wapas menu par 👇", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
 
+async def reset_registration_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.message.from_user.id
+    if update.message.chat.id == GROUP_CHAT_ID: return
+    
+    # We allow the user to reset their own registration for testing purposes
+    c = db(); cur = db_cursor(c)
+    try:
+        # Get student ID
+        cur.execute("SELECT mentorship_student_id FROM users WHERE telegram_id=%s", (uid,))
+        res = cur.fetchone()
+        if res and res["mentorship_student_id"]:
+            sid = res["mentorship_student_id"]
+            # Delete from related tables to ensure a clean slate
+            cur.execute("DELETE FROM weekly_timetable WHERE student_id=%s", (sid,))
+            cur.execute("DELETE FROM tasks WHERE student_id=%s", (sid,))
+            cur.execute("DELETE FROM daily_logs WHERE student_id=%s", (sid,))
+            cur.execute("DELETE FROM backlogs WHERE student_id=%s", (sid,))
+            cur.execute("DELETE FROM medical_leaves WHERE student_id=%s", (sid,))
+            cur.execute("DELETE FROM test_weeks WHERE student_id=%s", (sid,))
+            cur.execute("DELETE FROM reports WHERE student_id=%s", (sid,))
+            cur.execute("DELETE FROM students WHERE id=%s", (sid,))
+        
+        # Reset user record to initial state
+        cur.execute("""
+            UPDATE users 
+            SET step='ready_for_new_doubt', 
+                mentorship_mode='none', 
+                mentorship_student_id=NULL, 
+                mentorship_temp=NULL 
+            WHERE telegram_id=%s
+        """, (uid,))
+        c.commit()
+        await update.message.reply_text("✅ Registration reset ho gayi hai! Ab aap fresh registration start kar sakte hain via /start.")
+    except Exception as e:
+        logger.error(f"Reset error: {e}")
+        await update.message.reply_text("❌ Registration reset karne mein error aaya.")
+    finally:
+        c.close()
+
 async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.chat.id == GROUP_CHAT_ID:
         return
@@ -6306,6 +6345,8 @@ def main():
     app.add_handler(CommandHandler("uturn", handle_uturn), group=0)
 
     app.add_handler(CallbackQueryHandler(handle_callback_query), group=0)
+    app.add_handler(CommandHandler("resetregistration", reset_registration_command))
+    
     app.add_handler(MessageHandler(filters.Chat(GROUP_CHAT_ID) & non_command_messages, handle_group_reply), group=0)
     app.add_handler(MessageHandler(filters.ChatType.PRIVATE & non_command_messages, handle_teacher_dm), group=0)
     app.add_handler(MessageHandler(non_command_messages & ~filters.Chat(GROUP_CHAT_ID), handle_user), group=1)
