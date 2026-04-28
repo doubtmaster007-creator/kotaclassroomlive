@@ -1733,6 +1733,42 @@ def init_db():
             )
         """)
 
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS weekly_timetable (
+                id SERIAL PRIMARY KEY,
+                student_id UUID,
+                day_of_week VARCHAR(20),
+                coaching_slots JSONB,
+                free_slots JSONB,
+                batch_name VARCHAR(255),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS medical_leaves (
+                id SERIAL PRIMARY KEY,
+                student_id UUID,
+                leave_date DATE,
+                status VARCHAR(50),
+                reason TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS test_weeks (
+                id SERIAL PRIMARY KEY,
+                student_id UUID,
+                week_start_date DATE,
+                is_test_week BOOLEAN DEFAULT false,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         # 2. TEACHER TABLES
         c.execute("""
             CREATE TABLE IF NOT EXISTS teachers (
@@ -5040,25 +5076,26 @@ async def reset_registration_command(update: Update, context: ContextTypes.DEFAU
     uid = update.message.from_user.id
     if update.message.chat.id == GROUP_CHAT_ID: return
     
-    # We allow the user to reset their own registration for testing purposes
     c = db(); cur = db_cursor(c)
     try:
-        # Get student ID
         cur.execute("SELECT mentorship_student_id FROM users WHERE telegram_id=%s", (uid,))
         res = cur.fetchone()
         if res and res["mentorship_student_id"]:
             sid = res["mentorship_student_id"]
-            # Delete from related tables to ensure a clean slate
-            cur.execute("DELETE FROM weekly_timetable WHERE student_id=%s", (sid,))
-            cur.execute("DELETE FROM tasks WHERE student_id=%s", (sid,))
-            cur.execute("DELETE FROM daily_logs WHERE student_id=%s", (sid,))
-            cur.execute("DELETE FROM backlogs WHERE student_id=%s", (sid,))
-            cur.execute("DELETE FROM medical_leaves WHERE student_id=%s", (sid,))
-            cur.execute("DELETE FROM test_weeks WHERE student_id=%s", (sid,))
-            cur.execute("DELETE FROM reports WHERE student_id=%s", (sid,))
-            cur.execute("DELETE FROM students WHERE id=%s", (sid,))
-        
-        # Reset user record to initial state
+            
+            # Use individual tries to prevent crash if a table doesn't exist yet
+            tables = ["weekly_timetable", "tasks", "daily_logs", "backlogs", "medical_leaves", "test_weeks", "reports", "tickets"]
+            for table in tables:
+                try:
+                    cur.execute(f"DELETE FROM {table} WHERE student_id=%s", (sid,))
+                except Exception:
+                    c.rollback() # Fix: Use 'c' instead of 'conn'
+            
+            try:
+                cur.execute("DELETE FROM students WHERE id=%s", (sid,))
+            except Exception:
+                c.rollback()
+
         cur.execute("""
             UPDATE users 
             SET step='ready_for_new_doubt', 
@@ -5071,7 +5108,7 @@ async def reset_registration_command(update: Update, context: ContextTypes.DEFAU
         await update.message.reply_text("✅ Registration reset ho gayi hai! Ab aap fresh registration start kar sakte hain via /start.")
     except Exception as e:
         logger.error(f"Reset error: {e}")
-        await update.message.reply_text("❌ Registration reset karne mein error aaya.")
+        await update.message.reply_text(f"❌ Reset error: {str(e)[:100]}")
     finally:
         c.close()
 
