@@ -1733,12 +1733,12 @@ def init_db():
                 topic VARCHAR(255),
                 difficulty VARCHAR(50),
                 dedicated_time VARCHAR(255),
-                status VARCHAR(50) DEFAULT 'active',
+                status VARCHAR(50) DEFAULT 'pending',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
         # Migration for backlogs
-        for col, col_type in [("subject", "VARCHAR(255)"), ("topic", "VARCHAR(255)"), ("difficulty", "VARCHAR(50)"), ("dedicated_time", "VARCHAR(255)"), ("status", "VARCHAR(50) DEFAULT 'active'")]:
+        for col, col_type in [("subject", "VARCHAR(255)"), ("topic", "VARCHAR(255)"), ("difficulty", "VARCHAR(50)"), ("dedicated_time", "VARCHAR(255)"), ("status", "VARCHAR(50) DEFAULT 'pending'")]:
             try:
                 c.execute(f"ALTER TABLE backlogs ADD COLUMN IF NOT EXISTS {col} {col_type}")
             except:
@@ -1846,7 +1846,7 @@ def init_db():
         ensure_column_pg(conn, "backlogs", "topic", "VARCHAR(255)")
         ensure_column_pg(conn, "backlogs", "difficulty", "VARCHAR(50)")
         ensure_column_pg(conn, "backlogs", "dedicated_time", "VARCHAR(255)")
-        ensure_column_pg(conn, "backlogs", "status", "VARCHAR(50) DEFAULT 'active'")
+        ensure_column_pg(conn, "backlogs", "status", "VARCHAR(50) DEFAULT 'pending'")
         
         c.close()
         conn.close()
@@ -5470,7 +5470,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         c = db(); cur = db_cursor(c)
         try:
             cur.execute(
-                "SELECT * FROM backlogs WHERE student_id=%s AND status IN ('active', 'pending') ORDER BY created_at DESC",
+                "SELECT * FROM backlogs WHERE student_id=%s AND status IN ('pending', 'in_progress') ORDER BY created_at DESC",
                 (student["id"],)
             )
             backlogs = [dict(r) for r in cur.fetchall()]
@@ -5575,7 +5575,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             cur.execute(
                 """INSERT INTO backlogs (student_id, subject, topic, status)
                    VALUES (%s, %s, %s, %s) RETURNING *""",
-                (student["id"], subject, topic, "active")
+                (student["id"], subject, topic, "pending")
             )
             backlog = cur.fetchone() # Already a dict due to RealDictCursor
             c.commit(); c.close()
@@ -5594,7 +5594,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Error saving backlog: {e}", exc_info=True)
             await update.message.reply_text(
-                f"❌ Error saving backlog: {str(e)[:100]}\nPlease try again.",
+                f"❌ Error saving backlog: {str(e)[:200]}\nPlease try again.",
                 reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True)
             )
             return
