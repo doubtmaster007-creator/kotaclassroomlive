@@ -418,6 +418,7 @@ TEACHING STYLE:
 - Prefer slightly fuller explanations over ultra-short compressed answers.
 - For theoretical or text-based questions, keep the answer within 100 words.
 - Keep the answer readable and structured, but do not cut important intermediate reasoning.
+- ALWAYS end every doubt solution with the phrase: "Happy learning with MP Sir! ✨"
 
 ABSOLUTE RULES:
 1. Never guess or fabricate answers. If uncertain, say so clearly.
@@ -1782,6 +1783,10 @@ def init_db():
         ensure_column_pg(conn, "tickets", "assigned_at", "TIMESTAMP")
         ensure_column_pg(conn, "tickets", "reassigned_count", "INT DEFAULT 0")
         ensure_column_pg(conn, "tickets", "next_escalation_at", "TIMESTAMP")
+
+        ensure_column_pg(conn, "backlogs", "subject", "VARCHAR(255)")
+        ensure_column_pg(conn, "backlogs", "topic", "VARCHAR(255)")
+        ensure_column_pg(conn, "backlogs", "status", "VARCHAR(50)")
         
         c.close()
         conn.close()
@@ -3662,7 +3667,7 @@ async def run_mentorship_scheduler(bot):
 
                 start_hour = 7 if bucket == "morning" else 9
                 if now_dt.hour == start_hour and now_dt.minute == 0 and not markers.get(reminder_marker_key("start_day", date_key)):
-                    await bot.send_message(chat_id=int(student["telegram_id"]), text=f"Start your day. Today's classes: {combine_slots_for_message(slots)}. Class + notes + module reminder yahi sequence me follow karo.")
+                    await bot.send_message(chat_id=int(student["telegram_id"]), text=f"Good morning! ☀️ Aaj ka schedule hai: {combine_slots_for_message(slots)}. Happy learning with MP Sir! ✨")
                     markers[reminder_marker_key("start_day", date_key)] = True
 
                 for idx, slot in enumerate(slots):
@@ -3672,23 +3677,23 @@ async def run_mentorship_scheduler(bot):
                         continue
                     pre_key = reminder_marker_key(f"pre_class_{idx}", date_key)
                     if now_dt.replace(second=0, microsecond=0) == (start_dt - timedelta(minutes=30)) and not markers.get(pre_key):
-                        await bot.send_message(chat_id=int(student["telegram_id"]), text=f"{slot.get('subject', 'Class')} class 30 min me hai.")
+                        await bot.send_message(chat_id=int(student["telegram_id"]), text=f"🔔 {slot.get('subject', 'Class')} class 30 min me start hone waali hai dear bhulna mat! 📚")
                         markers[pre_key] = True
                     hw1_key = reminder_marker_key(f"hw1_{idx}", date_key)
                     if now_dt.replace(second=0, microsecond=0) == (end_dt + timedelta(minutes=10)) and not markers.get(hw1_key):
-                        await bot.send_message(chat_id=int(student["telegram_id"]), text=f"{slot.get('subject', 'Class')} class khatam ho gayi. Please send HW text now.")
+                        await bot.send_message(chat_id=int(student["telegram_id"]), text=f"✅ {slot.get('subject', 'Class')} class khatam ho gayi! Ab jaldi se homework (HW) details bhej do. ✍️")
                         temp["awaiting_hw_slot"] = {"date": date_key, "slot_index": idx, "subject": slot.get("subject", "General")}
                         markers[hw1_key] = True
                     hw2_key = reminder_marker_key(f"hw2_{idx}", date_key)
                     if now_dt.replace(second=0, microsecond=0) == (end_dt + timedelta(minutes=30)) and not markers.get(hw2_key):
                         if not temp.get("hw_received", {}).get(f"{date_key}:{idx}"):
-                            await bot.send_message(chat_id=int(student["telegram_id"]), text=f"{slot.get('subject', 'Class')} ka HW abhi tak nahi aaya. Please send HW text.")
+                            await bot.send_message(chat_id=int(student["telegram_id"]), text=f"Bhul gaye kya? ⏳ {slot.get('subject', 'Class')} ka HW abhi tak nahi aaya. Bhej do!")
                         markers[hw2_key] = True
 
                 progress_hour = 19 if bucket == "morning" else 21
                 progress_key = reminder_marker_key("progress", date_key)
                 if now_dt.hour == progress_hour and now_dt.minute == 0 and not markers.get(progress_key):
-                    await bot.send_message(chat_id=int(student["telegram_id"]), text="Progress Check. Jo pending hai wo next day first priority me aayega.")
+                    await bot.send_message(chat_id=int(student["telegram_id"]), text="Raat ho gayi! Progress check kar lein? ✨ Jo pending hai wo kal subah ki first priority hogi.")
                     markers[progress_key] = True
 
                 if now_dt.hour == 21 and now_dt.minute == 0:
@@ -3734,7 +3739,7 @@ async def run_mentorship_scheduler(bot):
 
                     await bot.send_message(
                         chat_id=int(student["telegram_id"]), 
-                        text="📝 Kis date ka timetable bhejna chahte hain? (Format: DD/MM/YYYY)",
+                        text="Kal ka kya plan hai? 📝 Kis date ka timetable bhejna chahte hain? (Format: DD/MM/YYYY)",
                         reply_markup=ReplyKeyboardMarkup([["Back", "Ask Doubt"]], resize_keyboard=True)
                     )
                     upd_user(int(student["telegram_id"]), {"step": "mentor_timetable_date"})
@@ -5073,10 +5078,10 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"👤 Student: {student['name']}\n"
             f"🎯 Goal: {student.get('exam_target', 'JEE')}\n"
             f"📅 Date: {today.strftime('%d %b %Y')}\n\n"
-            f"✅ Progress: {completion}%\n"
+            f"✅ Aaj ka kaam: {completion}%\n"
             f"⏳ Pending Tasks: {pending_count}\n"
             f"💪 Consistency Score: {student.get('consistency_score', 0)}%\n\n"
-            f"Aapki performance track ho rahi hai! ✨"
+            f"Aap bahut acha kar rahe ho, bas lage raho! Happy learning with MP Sir! ✨"
         )
         await update.message.reply_text(dashboard_text, parse_mode="Markdown", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_CLEAN_MENU, resize_keyboard=True))
         return
@@ -5186,12 +5191,17 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         try:
             subject, topic = [x.strip() for x in text.split("-", 1)]
+            student = get_student_by_telegram(uid)
+            if not student:
+                await update.message.reply_text("Student record not found.")
+                return
+            
             # Create backlog entry
             c = db(); cur = db_cursor(c)
             cur.execute(
                 """INSERT INTO backlogs (student_id, subject, topic, status, created_at)
                    VALUES (%s, %s, %s, %s, %s) RETURNING *""",
-                (uid, subject, topic, "active", now_iso())
+                (student["id"], subject, topic, "active", now_iso())
             )
             backlog = dict(cur.fetchone())
             c.commit(); c.close()
