@@ -1781,6 +1781,8 @@ def init_db():
                 leave_date DATE,
                 status VARCHAR(50),
                 reason TEXT,
+                student_requested BOOLEAN DEFAULT false,
+                auto_cancel_time TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -1863,6 +1865,9 @@ def init_db():
         ensure_column_pg(conn, "backlogs", "hours_per_day", "VARCHAR(50)")
         ensure_column_pg(conn, "backlogs", "dedicated_time", "VARCHAR(255)")
         ensure_column_pg(conn, "backlogs", "status", "VARCHAR(50) DEFAULT 'pending'")
+        
+        ensure_column_pg(conn, "medical_leaves", "student_requested", "BOOLEAN DEFAULT false")
+        ensure_column_pg(conn, "medical_leaves", "auto_cancel_time", "TIMESTAMP")
         
         c.close()
         conn.close()
