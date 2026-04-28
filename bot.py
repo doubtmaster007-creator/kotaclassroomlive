@@ -141,7 +141,7 @@ Important rules:
 6. Use only the provided free slots and available time.
 7. Do not invent subjects, topics, deadlines, syllabus, or performance details.
 8. Keep every task short, practical, and executable.
-9. If workload is more than available time, set needs_overload_check to true.
+9. If the total workload (HW + Backlogs) exceeds the available free time in the slots, still include the tasks but set needs_overload_check to true.
 10. Return valid JSON only. No markdown, no explanation, no extra text.
 
 Return JSON in exactly this format:
@@ -4769,6 +4769,57 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         return True
 
 
+    if step == "mentor_overload_confirm":
+        planner = temp.get("pending_overload_planner")
+        if not planner:
+            upd_user(uid, {"step": "mentor_ready"})
+            await update.message.reply_text("Something went wrong. Let's start over.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True))
+            return True
+
+        tasks_to_create = []
+        if text == "Yes, I'm Ready":
+            # Use all tasks from the overload planner
+            tasks_to_create = planner.get("tasks", [])
+        elif text == "No, keep it light":
+            # Filter out BACKLOG tasks or low priority tasks if it's too much
+            # For now, let's just filter out PENDING/BACKLOG types to keep it light
+            tasks_to_create = [t for t in planner.get("tasks", []) if t.get("type") not in ("PENDING", "BACKLOG")]
+            if not tasks_to_create: # Fallback if everything was backlog
+                 tasks_to_create = [t for t in planner.get("tasks", [])[:2]] # Keep first 2 tasks
+        else:
+            await update.message.reply_text("Please choose: Yes, I'm Ready or No, keep it light.", reply_markup=ReplyKeyboardMarkup([["Yes, I'm Ready", "No, keep it light"], ["Back"]], resize_keyboard=True))
+            return True
+
+        log = get_or_create_daily_log(student["id"], today_ist_date())
+        created_lines = []
+        for item in tasks_to_create:
+            task = create_task({
+                "student_id": student["id"],
+                "daily_log_id": log["id"],
+                "type": item.get("type"),
+                "subject": item.get("subject"),
+                "topic": item.get("topic"),
+                "description": item.get("description"),
+                "status": "pending",
+                "priority": item.get("priority", "medium"),
+                "source": item.get("source", "CLASS"),
+                "scheduled_date": today_ist_date(),
+                "estimated_minutes": item.get("estimated_minutes", 30),
+                "mentor_instruction": temp.get("mentor_instruction"),
+                "ai_plan_source": "daily_task_planner",
+            })
+            created_lines.append(f"{str(task['id'])[:8]} | {task.get('subject')} | {task.get('description')}")
+        
+        recalc_daily_log(student["id"], today_ist_date())
+        temp.pop("pending_overload_planner", None)
+        upd_user(uid, {"step": "mentor_ready"})
+        save_mentorship_temp(uid, temp)
+        await update.message.reply_text(
+            f"✅ Plan created!\n\n" + "\n".join(created_lines) + "\n\nAll the best for today! 💪",
+            reply_markup=ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True)
+        )
+        return True
+
     if step == "mentor_extra_task_ask":
         if text == "Yes":
             upd_user(uid, {"step": "mentor_extra_task_details"})
@@ -4851,7 +4902,20 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
                 planner = {"tasks": [
                     {"type": "HW", "subject": slot_info.get("subject", "General"), "topic": "Today's HW", "description": text, "priority": "critical", "estimated_minutes": 45, "source": "CLASS", "scheduled_slot_label": "Primary Study"},
                     {"type": "REVISION", "subject": slot_info.get("subject", "General"), "topic": "Today's Notes", "description": f"Revise {slot_info.get('subject', 'General')} notes taught today.", "priority": "high", "estimated_minutes": 30, "source": "CLASS", "scheduled_slot_label": "Primary Study"}
-                ]}
+                ], "needs_overload_check": False}
+
+            # Logic for overload check (Issue: Ask student for extra effort)
+            if planner.get("needs_overload_check"):
+                temp["pending_overload_planner"] = planner
+                upd_user(uid, {"step": "mentor_overload_confirm"})
+                save_mentorship_temp(uid, temp)
+                await update.message.reply_text(
+                    "⚠️ Aaj aapka load thoda zyada hai! Backlog aur regular kaam dono cover karne ke liye free time kam pad raha hai.\n\n"
+                    "Kya aap aaj thoda extra effort (extra study hours) daalne ke liye ready hain?",
+                    reply_markup=ReplyKeyboardMarkup([["Yes, I'm Ready", "No, keep it light"], ["Back"]], resize_keyboard=True)
+                )
+                return True
+
             log = get_or_create_daily_log(student["id"], today_ist_date())
             created_lines = []
             for item in planner.get("tasks", []):
