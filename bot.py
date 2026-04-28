@@ -5724,11 +5724,6 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         summary = get_custom_summary(student["id"], 30, 100)
         await update.message.reply_text(f"📊 *Monthly Summary*\n\n{summary}", parse_mode="Markdown", reply_markup=ReplyKeyboardMarkup(SUMMARY_MENU, resize_keyboard=True))
         return
-    elif text == "Back":
-        # Issue #6: Back button takes to main menu while preserving previous data
-        upd_user(uid, {"step":"ready_for_new_doubt", "awaiting_feedback":0, "awaiting_no_choice":0, "awaiting_rating":0})
-        await update.message.reply_text("Main menu par wapas. 👇", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
-        return
     elif text == "Bot Guide":
         guide_text = (
             "🚀 *JEE Mentorship Bot Guide*\n"
@@ -5834,10 +5829,9 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         upd_user(uid, {"step": "subject", "awaiting_feedback":0, "awaiting_no_choice":0, "awaiting_rating":0})
         await update.message.reply_text("Poochiye apna doubt 👇", reply_markup=ReplyKeyboardMarkup(SUBJECT_OPTIONS, resize_keyboard=True))
         return
-
-    if low_incoming == "back":
+            
+    if text == "Back":
         step = u.get("step", "")
-        # Mentorship Registration Steps
         if step == "mentor_exam_target":
             upd_user(uid, {"step": "ready_for_new_doubt"})
             await update.message.reply_text("Wapas main menu par 👇", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
@@ -5893,6 +5887,11 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             upd_user(uid, {"step": "mentor_ready"})
             await update.message.reply_text("Wapas My Mentorship par 👇", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True))
             return
+
+        # Fallback global Back button
+        upd_user(uid, {"step":"ready_for_new_doubt", "awaiting_feedback":0, "awaiting_no_choice":0, "awaiting_rating":0})
+        await update.message.reply_text("Main menu par wapas. 👇", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
+        return
         if step == "mentor_testweek_chemistry":
             upd_user(uid, {"step": "mentor_testweek_physics"})
             await update.message.reply_text("Physics test syllabus bhejo.", reply_markup=ReplyKeyboardMarkup([["Back", "Ask Doubt"]], resize_keyboard=True))
