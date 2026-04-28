@@ -5078,24 +5078,8 @@ async def reset_registration_command(update: Update, context: ContextTypes.DEFAU
     
     c = db(); cur = db_cursor(c)
     try:
-        cur.execute("SELECT mentorship_student_id FROM users WHERE telegram_id=%s", (uid,))
-        res = cur.fetchone()
-        if res and res["mentorship_student_id"]:
-            sid = res["mentorship_student_id"]
-            
-            # Use individual tries to prevent crash if a table doesn't exist yet
-            tables = ["weekly_timetable", "tasks", "daily_logs", "backlogs", "medical_leaves", "test_weeks", "reports", "tickets"]
-            for table in tables:
-                try:
-                    cur.execute(f"DELETE FROM {table} WHERE student_id=%s", (sid,))
-                except Exception:
-                    c.rollback() # Fix: Use 'c' instead of 'conn'
-            
-            try:
-                cur.execute("DELETE FROM students WHERE id=%s", (sid,))
-            except Exception:
-                c.rollback()
-
+        # Safe Detach: We just clear the pointers in the users table.
+        # This makes the user "new" for the bot without deleting historical data.
         cur.execute("""
             UPDATE users 
             SET step='ready_for_new_doubt', 
@@ -5105,10 +5089,10 @@ async def reset_registration_command(update: Update, context: ContextTypes.DEFAU
             WHERE telegram_id=%s
         """, (uid,))
         c.commit()
-        await update.message.reply_text("✅ Registration reset ho gayi hai! Ab aap fresh registration start kar sakte hain via /start.")
+        await update.message.reply_text("✅ Reset successful! Aapke account ko mentorship se unlink kar diya gaya hai. Fresh start ke liye /start type karein.")
     except Exception as e:
         logger.error(f"Reset error: {e}")
-        await update.message.reply_text(f"❌ Reset error: {str(e)[:100]}")
+        await update.message.reply_text(f"❌ Reset failed: {str(e)[:100]}")
     finally:
         c.close()
 
