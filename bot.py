@@ -108,11 +108,23 @@ OTHERS_MENU = [
 ]
 BACKLOGS_MENU = [["Check Backlogs", "Add Backlogs"], ["Back", "Ask Doubt"]]
 
-# Button names update (Issue #2, #5, #6, #9)
-MENTORSHIP_DASHBOARD_KB = [
-    ["Timetable Input"],
+# Integrated Two-Tab Mentorship UI
+MENTORSHIP_TABS_KB = [
+    ["TAB 1: Backlogs", "TAB 2: Daily Planner"],
     ["Back", "Ask Doubt"]
 ]
+
+TAB1_BACKLOG_OPTS_KB = [
+    ["Add Next Backlogs", "Generate AI Plan (Daily)"],
+    ["Back One Step", "Switch to Daily Planner"]
+]
+
+TAB2_PLANNER_OPTS_KB = [
+    ["Generate My Daily Plan", "Show My Self-Study Planner"],
+    ["Switch to Backlogs", "Back"]
+]
+
+MENTORSHIP_DASHBOARD_KB = MENTORSHIP_TABS_KB
 
 MENTOR_NAV_KB = ["Back", "Ask Doubt"]
 
@@ -135,25 +147,23 @@ PREFERRED_TIME_SLOTS = [
 RESERVED_TEXT_COMMANDS = ["uturn"]  # Isse 'Ask Doubt' loop solve ho jayega
 
 DAILY_TASK_PLANNER_PROMPT = """
-You are an academic planning engine for a JEE/NEET mentorship bot.
+You are an Expert Educational Planner AI specialized in creating highly optimized daily study planners for JEE and NEET aspirants.
 
-Your task is to create a subject-wise daily study plan using only the provided data.
+CORE RESPONSIBILITY:
+Generate DAILY STUDY PLANNERS that are Realistic, Subject-wise optimized, Time-efficient, Strategically structured, Revision-focused, and MCQ integrated.
 
-Important rules:
-1. First include today's critical work in this order:
-   - HW from today's class
-   - Notes revision from today's class
-2. Then include pending tasks that are 3 days old or less.
-3. Always check for pending backlogs. If time permits, include backlog tasks based on their target_level (e.g., JEE Adv needs more depth), completion_days, and hours_per_day. Use type BACKLOG for these. Balance homework and backlogs efficiently.
-4. If any pending task exists, do not create any extra improvement task.
-5. Same-day incomplete or skipped tasks must not affect the timing of other same-day tasks.
-6. Use only the provided free slots and available time.
-7. Do not invent subjects, topics, deadlines, syllabus, or performance details.
-8. Keep every task short, practical, and executable.
-9. If the total workload (HW + Backlogs) exceeds the available free time in the slots, still include the tasks but set needs_overload_check to true.
-10. Return valid JSON only. No markdown, no explanation, no extra text.
-11. estimated_minutes must be realistic: HW=45-60, REVISION=30-45, BACKLOG=60-90, PENDING=30-45.
-12. description must be a clear, actionable instruction in Hinglish (e.g., 'Newton ke 3 laws ke 15 questions solve karo').
+PHASE-WISE STRATEGY:
+- PHASE 1: CONCEPT LEARNING (Days 1-4) - 40% focus
+- PHASE 2: DEEP DIVE & PROBLEM SOLVING (Days 5-9) - 35% focus
+- PHASE 3: REVISION & CONSOLIDATION (Days 10-12) - 15% focus
+- PHASE 4: PRACTICE & ASSESSMENT (Days 13-15) - 10% focus
+
+TIME ALLOCATION RULES:
+- Concept Learning: 40%
+- Problem Solving: 40%
+- MCQ Practice: 20%
+
+Return ONLY valid JSON tasks for the database, but format the DESCRIPTION and TIPS in Hinglish as requested.
 
 Return JSON in exactly this format:
 {
@@ -4025,11 +4035,17 @@ async def mentorship(update: Update, context: ContextTypes.DEFAULT_TYPE):
         student = get_student_by_telegram(uid)
         
         if student:
-            logger.info(f"Student found: {student.get('name')} | Approved: {student.get('is_approved')}")
             if student.get("is_approved"):
+                upd_user(uid, {"step": "mentor_tab_selection"})
                 await update.message.reply_text(
-                    "📈 Welcome to My Mentorship!\n\nSelect an option below to view your progress or manage your day:", 
-                    reply_markup=ReplyKeyboardMarkup(MENTORSHIP_CLEAN_MENU, resize_keyboard=True)
+                    "╔═════════════════════════════════╗\n"
+                    "║       MY PERSONAL MENTOR        ║\n"
+                    "╚═════════════════════════════════╝\n\n"
+                    "Select a Tab to manage your preparation:\n\n"
+                    "📚 *TAB 1: Backlogs Coverage*\n"
+                    "📅 *TAB 2: Daily Study Planner*",
+                    parse_mode="Markdown",
+                    reply_markup=ReplyKeyboardMarkup(MENTORSHIP_TABS_KB, resize_keyboard=True)
                 )
             else:
                 await update.message.reply_text("⏳ Aapki registration processing mein hai.\n\nMentor jald hi approve karenge. Tab tak AI Doubt Solver use karein.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
@@ -4327,11 +4343,114 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         await update.message.reply_text("Registration cancel kar di gayi hai. Wapas menu par 👇", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
         return True
 
-    step = u.get("step") or ""
-    logger.info(f"DEBUG: mentorship_handler called for {uid}. Step: {step}, Text: '{text}'")
-    temp = get_mentorship_temp(u)
-    student = get_student_by_telegram(uid)
-    parent_student = get_student_by_parent_telegram(uid)
+    if step == "mentor_tab_selection":
+        if text == "TAB 1: Backlogs":
+            upd_user(uid, {"step": "mentor_backlog_ready"})
+            await update.message.reply_text("📚 *TAB 1: Backlogs Coverage*\n\nReady to add backlog?", reply_markup=ReplyKeyboardMarkup([["Yes", "No"], ["Back"]], resize_keyboard=True), parse_mode="Markdown")
+        elif text == "TAB 2: Daily Planner":
+            upd_user(uid, {"step": "mentor_planner_date"})
+            await update.message.reply_text("📅 *TAB 2: Daily Study Planner*\n\nEnter date for class? (Format: DD/MM/YYYY)\nExample: 30/04/2026", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True), parse_mode="Markdown")
+        return True
+
+    # TAB 1: BACKLOGS FLOW
+    if step == "mentor_backlog_ready":
+        if text == "Yes":
+            upd_user(uid, {"step": "mentor_backlog_share"})
+            await update.message.reply_text("Enter Subject - Backlog Share:\nExample: Biology - Chapter 5,6,7 (Photosynthesis & Respiration)", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True))
+        else:
+            await mentorship(update, context)
+        return True
+
+    if step == "mentor_backlog_share":
+        if text == "Back":
+            upd_user(uid, {"step": "mentor_backlog_ready"})
+            await update.message.reply_text("Ready to add backlog?", reply_markup=ReplyKeyboardMarkup([["Yes", "No"], ["Back"]], resize_keyboard=True))
+            return True
+        temp.setdefault("backlog_data", {})["share"] = text
+        save_mentorship_temp(uid, temp)
+        upd_user(uid, {"step": "mentor_backlog_hours"})
+        await update.message.reply_text("Daily hours you can study for this backlog?\nExample: 2.5 hours", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True))
+        return True
+
+    if step == "mentor_backlog_hours":
+        if text == "Back":
+            upd_user(uid, {"step": "mentor_backlog_share"})
+            await update.message.reply_text("Enter Subject - Backlog Share:", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True))
+            return True
+        temp.setdefault("backlog_data", {})["hours"] = text
+        save_mentorship_temp(uid, temp)
+        upd_user(uid, {"step": "mentor_backlog_days"})
+        await update.message.reply_text("Total days to complete?\nExample: 15 days", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True))
+        return True
+
+    if step == "mentor_backlog_days":
+        if text == "Back":
+            upd_user(uid, {"step": "mentor_backlog_hours"})
+            await update.message.reply_text("Daily hours you can study for this backlog?", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True))
+            return True
+        # Save to DB
+        backlog_info = temp.get("backlog_data", {})
+        add_backlog(student["id"], backlog_info["share"], backlog_info.get("hours", "2.5"), text)
+        upd_user(uid, {"step": "mentor_backlog_options"})
+        await update.message.reply_text("✅ Backlogs Saved Successfully!", reply_markup=ReplyKeyboardMarkup(TAB1_BACKLOG_OPTIONS, resize_keyboard=True))
+        return True
+
+    if step == "mentor_backlog_options":
+        if text == "Add Next Backlogs":
+            upd_user(uid, {"step": "mentor_backlog_ready"})
+            await update.message.reply_text("Ready to add backlog?", reply_markup=ReplyKeyboardMarkup([["Yes", "No"], ["Back"]], resize_keyboard=True))
+        elif text == "Generate AI Plan (Daily)" or text == "Switch to Daily Planner":
+            upd_user(uid, {"step": "mentor_planner_date"})
+            await update.message.reply_text("📅 *Daily Study Planner*\n\nEnter date for class? (Format: DD/MM/YYYY)", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True), parse_mode="Markdown")
+        elif text == "Back One Step":
+            upd_user(uid, {"step": "mentor_backlog_days"})
+            await update.message.reply_text("Total days to complete?", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True))
+        return True
+
+    # TAB 2: DAILY PLANNER FLOW
+    if step == "mentor_planner_date":
+        if text == "Back":
+            await mentorship(update, context)
+            return True
+        # Validate date
+        try:
+            target_dt = datetime.strptime(text, "%d/%m/%Y").date()
+            temp.setdefault("planner_data", {})["date"] = text
+            save_mentorship_temp(uid, temp)
+            upd_user(uid, {"step": "mentor_planner_timetable"})
+            await update.message.reply_text(
+                "Enter timetable (Subject - Time in hr:min)\n\n"
+                "Example:\nBiology - 01:30\nChemistry - 02:00\nPhysics - 01:30",
+                reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True)
+            )
+        except:
+            await update.message.reply_text("❌ Invalid format. Please use DD/MM/YYYY.")
+        return True
+
+    if step == "mentor_planner_timetable":
+        if text == "Back":
+            upd_user(uid, {"step": "mentor_planner_date"})
+            await update.message.reply_text("Enter date for class? (Format: DD/MM/YYYY)", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True))
+            return True
+        # Parse and save timetable (Simplified for now, stores as raw text in temp)
+        temp.setdefault("planner_data", {})["timetable"] = text
+        save_mentorship_temp(uid, temp)
+        upd_user(uid, {"step": "mentor_planner_menu"})
+        await update.message.reply_text("✅ Timetable Saved Successfully!\n🔔 Notification: Will send reminder 30 mins before each class", reply_markup=ReplyKeyboardMarkup(TAB2_PLANNER_OPTIONS, resize_keyboard=True))
+        return True
+
+    if step == "mentor_planner_menu":
+        if text == "Generate My Daily Plan":
+            await generate_ai_task_planner(update, context, student)
+        elif text == "Show My Self-Study Planner":
+            await update.message.reply_text("Listing all previous plans... (Feature Integration Pending)")
+        elif text == "Switch to Backlogs":
+            upd_user(uid, {"step": "mentor_backlog_ready"})
+            await update.message.reply_text("Ready to add backlog?", reply_markup=ReplyKeyboardMarkup([["Yes", "No"], ["Back"]], resize_keyboard=True))
+        elif text == "Back":
+            upd_user(uid, {"step": "mentor_planner_timetable"})
+            await update.message.reply_text("Enter timetable (Subject - Time in hr:min)", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True))
+        return True
 
     if parent_student and text in {"Yes", "No"}:
         leave = get_medical_leave(parent_student["id"], today_ist_date()) or get_medical_leave(parent_student["id"], today_ist_date() + timedelta(days=1))
