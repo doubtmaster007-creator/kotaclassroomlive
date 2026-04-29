@@ -1860,6 +1860,7 @@ def init_db():
         ensure_column_pg(conn, "students", "timetable_scope", "VARCHAR(20) DEFAULT 'one_day'")
         
         ensure_column_pg(conn, "users", "saw_launch_screen", "BOOLEAN DEFAULT false")
+        ensure_column_pg(conn, "users", "parent_lang_tmp", "VARCHAR(50)")
         ensure_column_pg(conn, "tickets", "assigned_teacher_id", "BIGINT")
         ensure_column_pg(conn, "tickets", "assigned_subject", "VARCHAR(255)")
         ensure_column_pg(conn, "tickets", "assigned_stream", "VARCHAR(255)")
