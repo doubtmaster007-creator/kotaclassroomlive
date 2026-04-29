@@ -4009,6 +4009,9 @@ async def finish_registration_and_ask_first_timetable(update: Update, uid: int):
         "Example: Physics 9 am, Chemistry 11 am. Agar class nahi hai toh 'Off'.",
         reply_markup=ReplyKeyboardMarkup([["Off"]], resize_keyboard=True)
     )
+    temp["timetable_target_date"] = target_dt.strftime('%d/%m/%Y')
+    temp["timetable_target_day"] = target_day
+    save_mentorship_temp(uid, temp)
     upd_user(uid, {"step": "mentor_daily_timetable_update"})
 
 async def timetable_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4387,7 +4390,6 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
             await update.message.reply_text("Select your preferred study time slot:", reply_markup=ReplyKeyboardMarkup(PREFERRED_TIME_SLOTS, resize_keyboard=True))
             return True
         
-        temp = get_mentorship_temp(uid)
         temp.setdefault("reg_data", {})["preferred_study_time"] = text
         save_mentorship_temp(uid, temp)
         upd_user(uid, {"step": "mentor_self_study_hours"})
@@ -5267,7 +5269,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             })
             
             await update.message.reply_text(
-                f"✅ Welcome back! Your profile loaded from Doubt Portal.\n"
+                f"✅ Welcome back! Your profile loaded from MENTORA Database.\n"
                 f"Name: {existing_name}\n"
                 f"Class: {existing_class}",
                 reply_markup=ReplyKeyboardRemove()
@@ -5305,7 +5307,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # User already registered
     upd_user(uid, {"step": "ready_for_new_doubt", "awaiting_feedback": 0, "awaiting_no_choice": 0})
     await update.message.reply_text(
-        "Ask Doubt ya My Mentorship me se choose karein 👇",
+        "Welcome to MENTORA! 🎓\n\nAsk Doubt select karein AI aur Doubt Guru se solution paane ke liye.\nYa My Mentorship choose karein systematic study ke liye.",
         reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True)
     )
 
