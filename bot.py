@@ -5988,18 +5988,23 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     caption = (update.message.caption or "").strip()
     incoming = text or caption
 
-    # Global Refresh Logic
-    if text == "Refresh":
+    # Global Control Logic (Priority 1)
+    if text == "Refresh" or text == "/start":
         upd_user(uid, {"step": "ready_for_new_doubt", "mentorship_mode": "active"})
         await update.message.reply_text("🔄 Flow refresh kar diya gaya hai. Wapas main menu par 👇", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
         return
 
-    # FIX: Buttons ko priority dena taaki "Reserved Command" trap mein na fasein
+    if text == "Cancel Doubt":
+        upd_user(uid, {"step": "ready_for_new_doubt"})
+        await update.message.reply_text("Doubt canceled. Main menu par wapas. 👇", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
+        return
+
     if text == "Ask Doubt":
         upd_user(uid, {"step": "subject"})
         await update.message.reply_text("Select Subject:", reply_markup=ReplyKeyboardMarkup(SUBJECT_OPTIONS, resize_keyboard=True))
         return
-    elif text == "My Mentorship":
+
+    if text == "My Personal Mentor":
         await mentorship(update, context)
         return
     elif text == "Show Mentorship Progress":
@@ -6258,9 +6263,12 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await timetable_command(update, context)
         return
 
-    logger.info(f"DEBUG: handle_user calling mentorship_handler for {uid}")
-    if await handle_mentorship_message(update, context, u):
-        return
+    # Skip mentorship handler if user is in middle of Doubt Flow
+    doubt_states = {"subject", "stream", "chapter", "question", "select_faculty", "followup_text"}
+    if u.get("step") not in doubt_states:
+        logger.info(f"DEBUG: handle_user calling mentorship_handler for {uid}")
+        if await handle_mentorship_message(update, context, u):
+            return
 
     if await handle_parent_language(update, context, u):
         return
