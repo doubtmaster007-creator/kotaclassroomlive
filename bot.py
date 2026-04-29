@@ -4541,9 +4541,25 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         # Handle Yes/No for existing timetable
         if text in ["Yes", "No", "Back"]:
             temp = get_mentorship_temp(u)
-            if text == "Back" or text == "No":
+            if text == "Back":
                 upd_user(uid, {"step": "mentor_ready"})
-                await update.message.reply_text("Theek hai! Dashboard par wapas chalte hain.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True))
+                await update.message.reply_text("Theek hai! Dashboard par wapas chalte hain.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_CLEAN_MENU, resize_keyboard=True))
+                return True
+            
+            if text == "No":
+                target_date = temp.get("timetable_target_date")
+                day_name = temp.get("timetable_target_day")
+                await update.message.reply_text(
+                    f"✅ {target_date} ({day_name}) ke liye timetable pehle se saved hai!\n\n"
+                    "🔔 *Reminder Info*: Class se pehle aapko notes aur module ke liye reminders mil jayenge.",
+                    parse_mode="Markdown"
+                )
+                upd_user(uid, {"step": "mentor_ready"})
+                await update.message.reply_text(
+                    "📝 Ab homework details bhejne ke liye 'HW Input' dabao.\n"
+                    "Ya 'Back' se dashboard par wapas jao.",
+                    reply_markup=ReplyKeyboardMarkup([["HW Input"], ["Back"]], resize_keyboard=True)
+                )
                 return True
             
             if text == "Yes":
