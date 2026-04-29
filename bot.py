@@ -4538,8 +4538,8 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         try:
             d = datetime.strptime(text, "%d/%m/%Y")
             d_date = d.date()
-            if d_date < today_ist_date():
-                await update.message.reply_text("❌ Back date is not allowed. Please enter today's or a future date.")
+            if d_date <= today_ist_date():
+                await update.message.reply_text("❌ Sirf aane waale dinon (Future Dates) ka timetable allow hai. Please enter tomorrow's or a later date.")
                 return True
             day_name = d.strftime("%A")
             
@@ -4681,31 +4681,6 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
                 reply_markup=ReplyKeyboardMarkup([["Entire Week", "Only for One Day"], ["Back", "Ask Doubt"]], resize_keyboard=True)
             )
             return True
-            
-        # Check if today's timetable was saved and classes already finished
-        today_str = today_ist_date().strftime('%d/%m/%Y')
-        if target_date_str == today_str:
-            sync_class_tasks(student["id"], today_ist_date(), slots)
-            
-            # Check if all classes finished
-            current_time_str = datetime.now(IST).strftime("%H:%M")
-            logger.info(f"🕒 Checking if classes are finished. Current: {current_time_str}, Slots: {slots}")
-            all_finished = True
-            if not slots:
-                all_finished = False
-            else:
-                for s in slots:
-                    end_time = s.get('end')
-                    if end_time and end_time > current_time_str:
-                        all_finished = False
-                        logger.info(f"⌛ Class {s.get('subject')} ends at {end_time}, which is in the future.")
-                        break
-            
-            logger.info(f"✅ All finished: {all_finished}")
-            if all_finished:
-                await update.message.reply_text("Dikh raha hai ki aaj ki saari classes khatam ho chuki hain! 🎓\nChaliye, jaldi se homework (HW) details bhej dijiye taaki main aapka planner bana sakun.")
-                await start_sequential_hw_flow(update, context, student)
-                return True
 
         upd_user(uid, {"step": "mentor_ready"})
         return True
