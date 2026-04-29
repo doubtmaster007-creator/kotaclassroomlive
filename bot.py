@@ -4163,6 +4163,7 @@ async def start_sequential_hw_flow(update, context, student):
 
     uid = int(student["telegram_id"])
     temp = get_mentorship_temp(get_user(uid))
+    
     temp["sequential_hw_subjects"] = subjects
     temp["sequential_hw_index"] = 0
     temp["sequential_hw_data"] = {}
@@ -4345,7 +4346,7 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
             pending_classes = [t for t in today_tasks if t.get("type") == "CLASS" and t.get("status") == "pending"]
             if not pending_classes:
                 # All classes done! Trigger HW flow
-                await update.message.reply_text("All classes done! Ready for homework? Let's go! 📖")
+                await update.message.reply_text("All classes done! ✅\n\nTum ab HW update kar do. 📖")
                 # Trigger sequential HW flow
                 await start_sequential_hw_flow(update, context, student)
         return True
@@ -5938,19 +5939,36 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not student or not student.get("is_approved"):
             await update.message.reply_text("⏳ Mentorship approval ke baad yeh feature available hoga.")
             return
-        # Get today's timetable subjects
+        
+        # Check if today's timetable is saved
         today_day = weekday_name(today_ist())
         timetable = get_weekday_timetable(student["id"], today_day)
         if not timetable or not timetable.get("slots"):
             await update.message.reply_text(
-                "❌ Aaj ke liye koi timetable saved nahi hai.\nPehle 'Start Mentorship Flow' → 'Timetable Input' se timetable save karo.",
+                "❌ Aaj ke liye koi timetable saved nahi hai.\nPehle 'Start Mentorship Flow' se timetable save karo.",
                 reply_markup=ReplyKeyboardMarkup([["Start Mentorship Flow"], ["Back"]], resize_keyboard=True)
             )
             return
+
+        # Check if all classes are done
+        today_tasks = get_student_tasks(student["id"], scheduled_date=today_ist_date())
+        pending_classes = [t for t in today_tasks if t.get("type") == "CLASS" and t.get("status") == "pending"]
+        
+        # If there are classes in timetable but no tasks yet, or tasks are pending
+        if pending_classes:
+            await update.message.reply_text(
+                "⚠️ *HW update possible only after class completion.*\n\n"
+                "Jab aapki aaj ki saari classes khatam ho jayengi, tabhi aap HW details de payenge.",
+                parse_mode="Markdown",
+                reply_markup=ReplyKeyboardMarkup(MENTORSHIP_CLEAN_MENU, resize_keyboard=True)
+            )
+            return
+
         subjects = [s.get("subject") for s in timetable.get("slots", []) if s.get("subject") and s.get("type") != "free"]
         if not subjects:
             await update.message.reply_text("❌ Aaj koi subject classes nahi hain.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_CLEAN_MENU, resize_keyboard=True))
             return
+            
         await start_sequential_hw_flow(update, context, student)
         return
 
