@@ -4465,6 +4465,10 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         return True
 
     if step == "mentor_batch":
+        if text == "Back":
+            upd_user(uid, {"step": "mentor_exam_target"})
+            await update.message.reply_text("Aapka exam target choose karo:", reply_markup=ReplyKeyboardMarkup(EXAM_TARGET_OPTIONS, resize_keyboard=True))
+            return True
         temp.setdefault("reg_data", {})["batch_name"] = text
         save_mentorship_temp(uid, temp)
         upd_user(uid, {"step": "mentor_parent_id"})
@@ -4644,7 +4648,14 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         day_name = temp.get("timetable_target_day")
         
         student = student or get_student(u.get("mentorship_student_id"))
-        
+        if text == "Back":
+            upd_user(uid, {"step": "mentor_daily_timetable_update"})
+            await update.message.reply_text(
+                "Theek hai, timetable phir se bhejiye.\nExample: Physics 9 am, Chemistry 11 am.",
+                reply_markup=ReplyKeyboardMarkup([["Off"], ["Back", "Ask Doubt"]], resize_keyboard=True)
+            )
+            return True
+
         if text == "Entire Week":
             # Save for all days in weekly_timetable
             for d_name in WEEK_DAYS:
@@ -4655,7 +4666,7 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
                 "🔔 *Reminder Info*: Har class se pehle aapko notes aur module ke liye reminders bhej diye jayenge.",
                 parse_mode="Markdown"
             )
-        else:
+        elif text == "Only for One Day":
             # Save only for that day
             upsert_weekly_timetable_row(student["id"], day_name, slots, free_slots, student.get("batch_name"))
             update_student(student["id"], {"timetable_scope": "one_day"})
@@ -4664,6 +4675,12 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
                 "🔔 *Reminder Info*: Class se pehle aapko notes aur module ke liye reminders mil jayenge.",
                 parse_mode="Markdown"
             )
+        else:
+            await update.message.reply_text(
+                "Please choose an option from the menu:",
+                reply_markup=ReplyKeyboardMarkup([["Entire Week", "Only for One Day"], ["Back", "Ask Doubt"]], resize_keyboard=True)
+            )
+            return True
             
         # Check if today's timetable was saved and classes already finished
         today_str = today_ist_date().strftime('%d/%m/%Y')
@@ -4672,16 +4689,19 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
             
             # Check if all classes finished
             current_time_str = datetime.now(IST).strftime("%H:%M")
+            logger.info(f"🕒 Checking if classes are finished. Current: {current_time_str}, Slots: {slots}")
             all_finished = True
             if not slots:
                 all_finished = False
             else:
                 for s in slots:
-                    # s['end'] is now a string "HH:MM"
-                    if s.get('end') and s.get('end') > current_time_str:
+                    end_time = s.get('end')
+                    if end_time and end_time > current_time_str:
                         all_finished = False
+                        logger.info(f"⌛ Class {s.get('subject')} ends at {end_time}, which is in the future.")
                         break
             
+            logger.info(f"✅ All finished: {all_finished}")
             if all_finished:
                 await update.message.reply_text("Dikh raha hai ki aaj ki saari classes khatam ho chuki hain! 🎓\nChaliye, jaldi se homework (HW) details bhej dijiye taaki main aapka planner bana sakun.")
                 await start_sequential_hw_flow(update, context, student)
