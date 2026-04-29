@@ -5161,6 +5161,14 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         return True
 
     if step == "mentor_ready":
+        if text == "Back":
+            upd_user(uid, {"step": "ready_for_new_doubt"})
+            await update.message.reply_text(
+                "Ask Doubt ya My Mentorship choose karo.", 
+                reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True)
+            )
+            return True
+            
         await update.message.reply_text("Mentorship mode active. Use Backlog, Medical Leave, Ask Doubt, ya Timetable Input.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True))
         return True
 
