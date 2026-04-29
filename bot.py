@@ -4713,7 +4713,13 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
             )
             return True
 
+        # After saving timetable, offer HW Input as next step
         upd_user(uid, {"step": "mentor_ready"})
+        await update.message.reply_text(
+            "📝 Ab homework details bhejne ke liye 'HW Input' dabao.\n"
+            "Ya 'Back' se dashboard par wapas jao.",
+            reply_markup=ReplyKeyboardMarkup([["HW Input"], ["Back"]], resize_keyboard=True)
+        )
         return True
 
     if step == "mentor_timetable_day":
@@ -5885,13 +5891,19 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=ReplyKeyboardMarkup([["HW Input"], ["Back"]], resize_keyboard=True)
             )
         else:
-            # No timetable → show Timetable Input only
-            upd_user(uid, {"step": "mentor_ready"})
+            # No timetable → directly ask for date
+            upd_user(uid, {"step": "mentor_timetable_date"})
             await update.message.reply_text(
-                "📅 Pehle aaj ke baad ka timetable save karo:",
-                reply_markup=ReplyKeyboardMarkup([["Timetable Input"], ["Back"]], resize_keyboard=True)
+                "📅 *Timetable Save Karo*\n\n"
+                "Step 1: Kis din ka timetable save karna hai?\n"
+                "Format: DD/MM/YYYY\n\n"
+                "Example: 30/04/2026\n\n"
+                "⚠️ _Sirf aane waale dinon (future dates) ka timetable allowed hai._",
+                reply_markup=ReplyKeyboardMarkup([["Back", "Ask Doubt"]], resize_keyboard=True),
+                parse_mode="Markdown"
             )
         return
+
 
     elif text == "Timetable Input":
         student = get_student_by_telegram(uid)
