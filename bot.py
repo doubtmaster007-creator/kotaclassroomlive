@@ -4221,6 +4221,9 @@ async def generate_ai_task_planner(update, context, student):
     delete_pending_tasks_for_day(student["id"], today_ist_date())
     log = get_or_create_daily_log(student["id"], today_ist_date())
     created_lines = []
+    emoji_map = {"HW": "📝", "REVISION": "📖", "BACKLOG": "🔁", "PENDING": "⏳", "TEST_WEEK": "📝"}
+    priority_emoji = {"critical": "🔴", "high": "🟡", "medium": "🟢"}
+    
     for item in planner.get("tasks", []):
         task = create_task({
             "student_id": student["id"],
@@ -4237,17 +4240,21 @@ async def generate_ai_task_planner(update, context, student):
             "mentor_instruction": temp.get("mentor_instruction"),
             "ai_plan_source": "daily_task_planner",
         })
-        created_lines.append(f"{str(task['id'])[:8]} | {task.get('subject')} | {task.get('description')} ({item.get('estimated_minutes')} min)")
+        
+        e = emoji_map.get(item.get("type"), "📝")
+        p = priority_emoji.get(item.get("priority"), "🟢")
+        created_lines.append(f"{e} {p} *{item.get('subject')}* — {item.get('description')} _({item.get('estimated_minutes')}m)_")
     
     recalc_daily_log(student["id"], today_ist_date())
     
     # Priority 4.2: Extra Task Addition (Optional)
     upd_user(uid, {"step": "mentor_extra_task_ask"})
     await update.message.reply_text(
-        f"Here's your Task Plan for Today 📋:\n\n" + 
+        f"Aapka aaj ka Plan taiyaar hai! 📋\n\n" + 
         "\n".join(created_lines) + 
         f"\n\nKya aap is planner mein kuch aur add karna chahte hain?",
-        reply_markup=ReplyKeyboardMarkup([["Yes", "No"], ["Back", "Ask Doubt"]], resize_keyboard=True)
+        reply_markup=ReplyKeyboardMarkup([["Yes", "No"], ["Back", "Ask Doubt"]], resize_keyboard=True),
+        parse_mode="Markdown"
     )
 
 async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAULT_TYPE, u: Dict[str, Any]) -> bool:
@@ -4664,14 +4671,14 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
             sync_class_tasks(student["id"], today_ist_date(), slots)
             
             # Check if all classes finished
-            current_time = datetime.now(IST).time()
+            current_time_str = datetime.now(IST).strftime("%H:%M")
             all_finished = True
             if not slots:
                 all_finished = False
             else:
                 for s in slots:
-                    # s['end'] is a time object from parse_slot_text
-                    if s.get('end') and s.get('end') > current_time:
+                    # s['end'] is now a string "HH:MM"
+                    if s.get('end') and s.get('end') > current_time_str:
                         all_finished = False
                         break
             
@@ -4780,6 +4787,9 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         
         log = get_or_create_daily_log(student["id"], today_ist_date())
         created_lines = []
+        emoji_map = {"HW": "📝", "REVISION": "📖", "BACKLOG": "🔁", "PENDING": "⏳", "TEST_WEEK": "🧪"}
+        priority_emoji = {"critical": "🔴", "high": "🟡", "medium": "🟢"}
+        
         for item in planner.get("tasks", []):
             task = create_task({
                 "student_id": student["id"],
@@ -4796,7 +4806,9 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
                 "mentor_instruction": "Medical leave tomorrow - priority to clear backlog",
                 "ai_plan_source": "medical_leave_prep",
             })
-            created_lines.append(f"{str(task['id'])[:8]} | {task.get('subject')} | {task.get('description')}")
+            e = emoji_map.get(item.get("type"), "📝")
+            p = priority_emoji.get(item.get("priority"), "🔴")
+            created_lines.append(f"{e} {p} *{item.get('subject')}* — {item.get('description')} _({item.get('estimated_minutes')}m)_")
         
         recalc_daily_log(student["id"], today_ist_date())
         
@@ -4886,15 +4898,15 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
             await update.message.reply_text("Please choose: Yes, I'm Ready or No, keep it light.", reply_markup=ReplyKeyboardMarkup([["Yes, I'm Ready", "No, keep it light"], ["Back"]], resize_keyboard=True))
             return True
 
-        TYPE_EMOJI = {"HW": "📝", "REVISION": "📖", "BACKLOG": "🔁", "PENDING": "⏳", "TEST_WEEK": "🧪"}
-        PRIORITY_LABEL = {"critical": "🔴", "high": "🟡", "medium": "🟢"}
+        emoji_map = {"HW": "📝", "REVISION": "📖", "BACKLOG": "🔁", "PENDING": "⏳", "TEST_WEEK": "🧪"}
+        priority_emoji = {"critical": "🔴", "high": "🟡", "medium": "🟢"}
         plan_lines = []
-        for idx, task in enumerate(tasks_to_create, 1):
+        for task in tasks_to_create:
             mins = task.get('estimated_minutes', 30)
-            hrs = f"{mins // 60}h {mins % 60}m" if mins >= 60 else f"{mins}m"
-            emoji = TYPE_EMOJI.get(task.get('type', ''), '📌')
-            priority = PRIORITY_LABEL.get(task.get('priority', 'medium'), '🟢')
-            plan_lines.append(f"{idx}. {emoji} {priority} *{task.get('subject')}* — {task.get('description')} _({hrs})_")
+            hrs_str = f"{mins // 60}h {mins % 60}m" if mins >= 60 else f"{mins}m"
+            e = emoji_map.get(task.get('type'), "📌")
+            p = priority_emoji.get(task.get('priority'), "🟢")
+            plan_lines.append(f"{e} {p} *{task.get('subject')}* — {task.get('description')} _({hrs_str})_")
         
         recalc_daily_log(student["id"], today_ist_date())
         temp.pop("pending_overload_planner", None)
@@ -5006,10 +5018,10 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
 
             delete_pending_tasks_for_day(student["id"], today_ist_date())
             log = get_or_create_daily_log(student["id"], today_ist_date())
-            TYPE_EMOJI = {"HW": "📝", "REVISION": "📖", "BACKLOG": "🔁", "PENDING": "⏳", "TEST_WEEK": "🧪"}
-            PRIORITY_LABEL = {"critical": "🔴", "high": "🟡", "medium": "🟢"}
+            emoji_map = {"HW": "📝", "REVISION": "📖", "BACKLOG": "🔁", "PENDING": "⏳", "TEST_WEEK": "🧪"}
+            priority_emoji = {"critical": "🔴", "high": "🟡", "medium": "🟢"}
             plan_lines = []
-            for idx, item in enumerate(planner.get("tasks", []), 1):
+            for item in planner.get("tasks", []):
                 task = create_task({
                     "student_id": student["id"],
                     "daily_log_id": log["id"],
@@ -5026,10 +5038,10 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
                     "ai_plan_source": "daily_task_planner",
                 })
                 mins = item.get('estimated_minutes', 30)
-                hrs = f"{mins // 60}h {mins % 60}m" if mins >= 60 else f"{mins}m"
-                emoji = TYPE_EMOJI.get(item.get('type', ''), '📌')
-                priority = PRIORITY_LABEL.get(item.get('priority', 'medium'), '🟢')
-                plan_lines.append(f"{idx}. {emoji} {priority} *{item.get('subject')}* — {item.get('description')} _({hrs})_")
+                hrs_str = f"{mins // 60}h {mins % 60}m" if mins >= 60 else f"{mins}m"
+                e = emoji_map.get(item.get("type"), "📌")
+                p = priority_emoji.get(item.get("priority"), "🟢")
+                plan_lines.append(f"{e} {p} *{item.get('subject')}* — {item.get('description')} _({hrs_str})_")
             recalc_daily_log(student["id"], today_ist_date())
             temp.setdefault("hw_received", {})[f"{slot_info['date']}:{slot_info['slot_index']}"] = True
             temp.pop("awaiting_hw_slot", None)
