@@ -69,7 +69,7 @@ CLASS_OPTIONS = [["11", "12"]]
 SUBJECT_OPTIONS = [["Physics", "Chemistry", "Mathematics", "Biology"], ["Cancel Doubt"]]
 RATING_OPTIONS = [["10", "9", "8", "7", "6"], ["5", "4", "3", "2", "1"], ["Cancel"]]  # Issue #3: Added Cancel
 NEW_DOUBT_OPTIONS = [["Ask Doubt"]]
-MENTORSHIP_ENTRY_OPTIONS = [["Ask Doubt", "My Personal Mentor"], ["Others"]]
+MENTORSHIP_ENTRY_OPTIONS = [["Ask Doubt", "My Personal Mentor"], ["Others", "Refresh"]]
 MENTORSHIP_TARGET_OPTIONS = [["Mentorship", "Backlog Coverage"], ["Back", "Ask Doubt"]]
 EXAM_TARGET_OPTIONS = [["Mains", "Adv", "Boards", "NEET"], ["Back", "Ask Doubt"]]
 PARENT_LANGUAGE_OPTIONS = [["Hindi"], ["Marathi"], ["English"], ["Tamil", "Kannada"], ["Back"]]  # Issue #13: Changed from "Skip/Cancel" to "Back"
@@ -5987,6 +5987,12 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
     caption = (update.message.caption or "").strip()
     incoming = text or caption
+
+    # Global Refresh Logic
+    if text == "Refresh":
+        upd_user(uid, {"step": "ready_for_new_doubt", "mentorship_mode": "active"})
+        await update.message.reply_text("🔄 Flow refresh kar diya gaya hai. Wapas main menu par 👇", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
+        return
 
     # FIX: Buttons ko priority dena taaki "Reserved Command" trap mein na fasein
     if text == "Ask Doubt":
