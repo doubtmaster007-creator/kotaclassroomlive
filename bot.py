@@ -2169,6 +2169,29 @@ def create_task(data: Dict[str, Any]) -> Dict[str, Any]:
     c.commit(); c.close()
     return dict(row)
 
+def sync_class_tasks(student_id: str, target_date: date, slots: List[Dict[str, Any]]):
+    log = get_or_create_daily_log(student_id, target_date)
+    existing = get_student_tasks(student_id, scheduled_date=target_date)
+    existing_subjects = {t.get("subject") for t in existing if t.get("type") == "CLASS"}
+    
+    for s in slots:
+        subj = s.get("subject")
+        if subj and subj not in existing_subjects:
+            create_task({
+                "student_id": student_id,
+                "daily_log_id": log["id"],
+                "type": "CLASS",
+                "subject": subj,
+                "topic": "Class Session",
+                "description": f"{subj} class session",
+                "status": "pending",
+                "priority": "high",
+                "source": "CLASS",
+                "scheduled_date": target_date,
+                "scheduled_at": str(s.get("start")),
+                "estimated_minutes": 90
+            })
+
 def update_task(task_id: str, fields: Dict[str, Any]):
     if not fields:
         return
@@ -4504,6 +4527,9 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         try:
             d = datetime.strptime(text, "%d/%m/%Y")
             d_date = d.date()
+            if d_date < today_ist_date():
+                await update.message.reply_text("❌ Back date is not allowed. Please enter today's or a future date.")
+                return True
             day_name = d.strftime("%A")
             
             # Check if timetable already exists for this day
@@ -4632,6 +4658,28 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
                 parse_mode="Markdown"
             )
             
+        # Check if today's timetable was saved and classes already finished
+        today_str = today_ist_date().strftime('%d/%m/%Y')
+        if target_date_str == today_str:
+            sync_class_tasks(student["id"], today_ist_date(), slots)
+            
+            # Check if all classes finished
+            current_time = datetime.now(IST).time()
+            all_finished = True
+            if not slots:
+                all_finished = False
+            else:
+                for s in slots:
+                    # s['end'] is a time object from parse_slot_text
+                    if s.get('end') and s.get('end') > current_time:
+                        all_finished = False
+                        break
+            
+            if all_finished:
+                await update.message.reply_text("Dikh raha hai ki aaj ki saari classes khatam ho chuki hain! 🎓\nChaliye, jaldi se homework (HW) details bhej dijiye taaki main aapka planner bana sakun.")
+                await start_sequential_hw_flow(update, context, student)
+                return True
+
         upd_user(uid, {"step": "mentor_ready"})
         return True
 
