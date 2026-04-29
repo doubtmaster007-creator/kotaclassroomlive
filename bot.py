@@ -69,7 +69,7 @@ CLASS_OPTIONS = [["11", "12"]]
 SUBJECT_OPTIONS = [["Physics", "Chemistry", "Mathematics", "Biology"], ["Cancel Doubt"]]
 RATING_OPTIONS = [["10", "9", "8", "7", "6"], ["5", "4", "3", "2", "1"], ["Cancel"]]  # Issue #3: Added Cancel
 NEW_DOUBT_OPTIONS = [["Ask Doubt"]]
-MENTORSHIP_ENTRY_OPTIONS = [["Ask Doubt", "My Mentorship"], ["Backlogs", "Others"]]
+MENTORSHIP_ENTRY_OPTIONS = [["Ask Doubt", "My Personal Mentor"], ["Others"]]
 MENTORSHIP_TARGET_OPTIONS = [["Mentorship", "Backlog Coverage"], ["Back", "Ask Doubt"]]
 EXAM_TARGET_OPTIONS = [["Mains", "Adv", "Boards", "NEET"], ["Back", "Ask Doubt"]]
 PARENT_LANGUAGE_OPTIONS = [["Hindi"], ["Marathi"], ["English"], ["Tamil", "Kannada"], ["Back"]]  # Issue #13: Changed from "Skip/Cancel" to "Back"
@@ -3548,7 +3548,7 @@ async def deliver_teacher_solution(context: ContextTypes.DEFAULT_TYPE, qid: str,
         u2 = get_user(uid)
         if int(u2["awaiting_rating"]) == 0:
             await context.bot.send_message(chat_id=uid, text="Ticket closed.")
-            await context.bot.send_message(chat_id=uid, text="Ask Doubt ya My Mentorship choose karo.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
+            await context.bot.send_message(chat_id=uid, text="Ask Doubt ya My Personal Mentor choose karo.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
     else:
         upd_doubt(qid, {"status":"teacher_replied"})
         upd_ticket(qid, {"claim_expires_at": None})
@@ -5240,7 +5240,7 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         if text == "Back":
             upd_user(uid, {"step": "ready_for_new_doubt"})
             await update.message.reply_text(
-                "Ask Doubt ya My Mentorship choose karo.", 
+                "Ask Doubt ya My Personal Mentor choose karo.", 
                 reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True)
             )
             return True
@@ -6371,7 +6371,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             add_rating(uid, u.get("current_qid"), int(text))
             upd_user(uid, {"awaiting_rating":0, "step":"ready_for_new_doubt"})
             await update.message.reply_text("Thanks for your feedback.")
-            await update.message.reply_text("Ask Doubt ya My Mentorship choose karo.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
+            await update.message.reply_text("Ask Doubt ya My Personal Mentor choose karo.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
         else:
             await update.message.reply_text("Please select rating 1 to 10.", reply_markup=ReplyKeyboardMarkup(RATING_OPTIONS, resize_keyboard=True))
         return
@@ -6380,10 +6380,10 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if text == "Ask Doubt":
             upd_user(uid, {"step":"subject"})
             await update.message.reply_text("Select Subject:", reply_markup=ReplyKeyboardMarkup(SUBJECT_OPTIONS, resize_keyboard=True))
-        elif text == "My Mentorship":
+        elif text == "My Personal Mentor":
             await mentorship(update, context)
         else:
-            await update.message.reply_text("Ask Doubt ya My Mentorship choose karo.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
+            await update.message.reply_text("Ask Doubt ya My Personal Mentor choose karo.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
         return
 
     t_qid = u.get("awaiting_teacher_feedback_qid")
@@ -6395,20 +6395,20 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             u2 = get_user(uid)
             if int(u2["awaiting_rating"]) == 0:
                 await update.message.reply_text("Great.")
-                await update.message.reply_text("Ask Doubt ya My Mentorship choose karo.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
+                await update.message.reply_text("Ask Doubt ya My Personal Mentor choose karo.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
             return
         if low == "no":
             t = get_ticket(t_qid)
             if not t:
                 upd_user(uid, {"awaiting_teacher_feedback_qid": None, "step":"subject"})
-                await update.message.reply_text("Ticket not found. Ask Doubt ya My Mentorship choose karo.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
+                await update.message.reply_text("Ticket not found. Ask Doubt ya My Personal Mentor choose karo.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
                 return
             if int(t["reopen_count"]) >= 1:
                 upd_ticket(t_qid, {"status":"closed"})
                 upd_doubt(t_qid, {"status":"closed"})
                 upd_user(uid, {"awaiting_teacher_feedback_qid": None, "step":"ready_for_new_doubt"})
                 await update.message.reply_text("Is QID ka one-time follow-up already used ho chuka hai. Please new doubt bhejein.")
-                await update.message.reply_text("Ask Doubt ya My Mentorship choose karo.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
+                await update.message.reply_text("Ask Doubt ya My Personal Mentor choose karo.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
                 return
             upd_user(uid, {"step":"followup_text"})
             await update.message.reply_text("Apna follow-up question bhejiye (same QID pe one-time).", reply_markup=ReplyKeyboardRemove())
@@ -6419,7 +6419,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         t = get_ticket(qid) if qid else None
         if not qid or not t:
             upd_user(uid, {"step":"subject"})
-            await update.message.reply_text("Session expired. Ask Doubt ya My Mentorship choose karo.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
+            await update.message.reply_text("Session expired. Ask Doubt ya My Personal Mentor choose karo.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
             return
         claimed_teacher_id = t.get("claimed_by")
         claimed_teacher_name = t.get("claimed_by_name")
@@ -6465,7 +6465,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             u2 = get_user(uid)
             if int(u2["awaiting_rating"]) == 0:
                 await update.message.reply_text("Great.")
-                await update.message.reply_text("Ask Doubt ya My Mentorship choose karo.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
+                await update.message.reply_text("Ask Doubt ya My Personal Mentor choose karo.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
             return
         if low == "no":
             upd_user(uid, {"awaiting_feedback":0, "awaiting_no_choice":1})
@@ -6476,7 +6476,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         qid = u.get("current_qid")
         if not qid:
             upd_user(uid, {"awaiting_no_choice":0, "step":"subject"})
-            await update.message.reply_text("No active doubt found. Ask Doubt ya My Mentorship choose karo.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
+            await update.message.reply_text("No active doubt found. Ask Doubt ya My Personal Mentor choose karo.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
             return
 
         # Issue #3: Handle Cancel button in doubt flow
@@ -6529,14 +6529,14 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if (now_ist.hour >= 22 or now_ist.hour < 10) and not is_admin_user(uid):
             upd_user(uid, {"step":"subject"})
             await update.message.reply_text("MENTORA routing disabled: Faculty are offline from 10 PM to 10 AM. Only AI flow is active.")
-            return await update.message.reply_text("Ask Doubt ya My Mentorship choose karo.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
+            return await update.message.reply_text("Ask Doubt ya My Personal Mentor choose karo.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
 
         if not is_paid:
             lifetime_used = int(u.get("doubt_guru_lifetime_used") or 0)
             if lifetime_used >= 5:
                 upd_user(uid, {"step":"subject"})
                 await update.message.reply_text("You are not a premium user on this platform. Free trial over.")
-                return await update.message.reply_text("Ask Doubt ya My Mentorship choose karo.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
+                return await update.message.reply_text("Ask Doubt ya My Personal Mentor choose karo.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
             # Quota update will happen when actually sent
         
         if text == "Send in Group (Fast Process)":
@@ -6600,7 +6600,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         qid = u.get("current_qid")
         if not qid:
             upd_user(uid, {"step":"subject"})
-            return await update.message.reply_text("No active doubt found. Ask Doubt ya My Mentorship choose karo.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
+            return await update.message.reply_text("No active doubt found. Ask Doubt ya My Personal Mentor choose karo.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
             
         if text == "Back":
             upd_user(uid, {"step": "choose_doubt_guru_mode"})
@@ -6820,7 +6820,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if d_count >= 5:
                 await update.message.reply_text("⛔ You have exhausted your free limit of 5 AI doubts for the last 24 hours.\nPlease wait before trying again.")
                 upd_user(uid, {"step": "ready_for_new_doubt"})
-                await update.message.reply_text("Ask Doubt ya My Mentorship choose karo.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
+                await update.message.reply_text("Ask Doubt ya My Personal Mentor choose karo.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
                 return
 
         processing_msg = await update.message.reply_text("Processing your doubt, please wait... ⏳")
@@ -6899,7 +6899,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await update.message.reply_text(f"QID: {qid}\n\n{answer}")
                     await update.message.reply_text("⚠️ This doubt requires MENTORA's review for 100% accuracy.\nNote: Auto-routing to MENTORA is disabled for Free accounts.")
                     upd_user(uid, {"step": "ready_for_new_doubt", "awaiting_feedback": 0})
-                    await update.message.reply_text("Ask Doubt ya My Mentorship choose karo.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
+                    await update.message.reply_text("Ask Doubt ya My Personal Mentor choose karo.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
                     return
 
                 now_ist = datetime.now(IST)
@@ -6908,7 +6908,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await update.message.reply_text(f"QID: {qid}\n\n{answer}")
                     await update.message.reply_text("⚠️ This doubt requires MENTORA's review, but faculty routing is disabled at night (10 PM - 10 AM). Only AI flow is active.")
                     upd_user(uid, {"step": "ready_for_new_doubt", "awaiting_feedback": 0})
-                    await update.message.reply_text("Ask Doubt ya My Mentorship choose karo.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
+                    await update.message.reply_text("Ask Doubt ya My Personal Mentor choose karo.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
                     return
 
                 await update.message.reply_text(f"QID: {qid}\nIs doubt me accuracy-sensitive exception ho sakta hai, isliye we need to send it to MENTORA.")
@@ -6986,7 +6986,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 try: await processing_msg.delete()
                 except: pass
             await update.message.reply_text("Error: Please try again. ❌")
-            await update.message.reply_text("Ask Doubt ya My Mentorship choose karo.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
+            await update.message.reply_text("Ask Doubt ya My Personal Mentor choose karo.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
             upd_user(uid, {"step": "ready_for_new_doubt", "awaiting_feedback": 0})
             return
 
