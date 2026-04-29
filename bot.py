@@ -1857,6 +1857,7 @@ def init_db():
         ensure_column_pg(conn, "students", "parent_phone", "VARCHAR(50)")
         ensure_column_pg(conn, "students", "timetable_scope", "VARCHAR(20) DEFAULT 'one_day'")
         
+        ensure_column_pg(conn, "users", "saw_launch_screen", "BOOLEAN DEFAULT false")
         ensure_column_pg(conn, "tickets", "assigned_teacher_id", "BIGINT")
         ensure_column_pg(conn, "tickets", "assigned_subject", "VARCHAR(255)")
         ensure_column_pg(conn, "tickets", "assigned_stream", "VARCHAR(255)")
@@ -2614,26 +2615,7 @@ async def prompt_new_doubt(update_or_context, uid: int, via_context: bool = Fals
             reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True)
         )
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.message.from_user.id
-    ensure_user(uid)
-    
-    args = context.args
-    if args and args[0].startswith("parent_"):
-        student_uid = args[0].split("_")[1]
-        student = get_student_by_telegram(int(student_uid))
-        if student:
-            upd_user(uid, {"step": f"parent_lang_select_{student_uid}"})
-            await update.message.reply_text(
-                f"Pranam! Aap {student['name']} ke parent hain. ✨\n\nReports ke liye apni pasandida bhasha (language) select karein:",
-                reply_markup=ReplyKeyboardMarkup(PARENT_LANGUAGE_OPTIONS, resize_keyboard=True)
-            )
-            return
-
-    await update.message.reply_text(
-        "Welcome to JEE Doubt Guru! 🎓\n\nAsk Doubt select karein AI aur Doubt Guru se solution paane ke liye.\nYa My Mentorship choose karein systematic study ke liye.",
-        reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True)
-    )
+# The start function was moved and merged with the one at line 5113 for better organization.
 
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -5110,8 +5092,102 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
 
     return step.startswith("mentor_")
 
+async def send_launch_screen(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    bot_desc = get_meta("bot_launch_description")
+    author_desc = get_meta("author_description")
+    author_photo = get_meta("author_photo_id")
+
+    # 1. Send Bot Description
+    if bot_desc:
+        await update.message.reply_text(bot_desc, parse_mode="Markdown")
+        await asyncio.sleep(1) # Small delay for better UX
+    
+    # 2. Send Author Description with Image
+    if author_desc:
+        if author_photo:
+            try:
+                # If author_photo starts with http, it's a URL, else assume it's a file_id or path
+                await update.message.reply_photo(photo=author_photo, caption=author_desc, parse_mode="Markdown")
+            except Exception as e:
+                logger.error(f"Failed to send author photo: {e}")
+                await update.message.reply_text(author_desc, parse_mode="Markdown")
+        else:
+            await update.message.reply_text(author_desc, parse_mode="Markdown")
+
+def setup_launch_content():
+    bot_desc = """🤖 *MENTORA - Bot Launch Screen*
+
+---
+
+*What is MENTORA?*
+Your *24/7 AI Study Companion* for JEE Mains, JEE Advanced, NEET, and 12th Board Exams.
+*Powered by 12+ years of teaching expertise from Kota's top institutions.*
+
+---
+
+*What Can MENTORA Do?*
+✨ *Solve Doubts Instantly* - Image-based doubt solving for Physics, Chemistry, Biology, Math
+📚 *Create Daily Plans* - AI-generated personalized study schedules
+📋 *Track Progress* - Daily reports showing what you completed
+🎯 *Smart Reminders* - Class reminders, homework alerts, task notifications
+⏰ *Manage Homework* - Sequential homework tracking subject-by-subject
+🧠 *Cover Backlogs* - AI-assisted plans for missed topics
+
+---
+
+*Get Started*
+1️⃣ Set your exam goals
+2️⃣ Create your profile
+3️⃣ Start solving doubts & planning your day!
+
+*Let's ace your exams together! 🚀*"""
+
+    author_desc = """*About Your Mentor*
+
+*Mayank Pareek*
+• *Experience:* 12+ Years Teaching Excellence
+• *Specialization:* JEE Mains, JEE Advanced, NEET
+• *Base:* Kota's Most Prominent Institutions
+• *Success Rate:* 95%+ student target achievement
+
+*Philosophy:* "Every student can excel with the right guidance at the right time."
+
+MENTORA brings that guidance to you 24/7."""
+
+    # Save to DB
+    set_meta("bot_launch_description", bot_desc)
+    set_meta("author_description", author_desc)
+    # Note: author_photo_id should be set manually or via a command after uploading to Telegram
+
+async def set_author_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.message.from_user.id
+    if not is_admin_user(uid):
+        return
+    
+    if update.message.reply_to_message and update.message.reply_to_message.photo:
+        photo_id = update.message.reply_to_message.photo[-1].file_id
+        set_meta("author_photo_id", photo_id)
+        await update.message.reply_text(f"✅ Author photo updated! File ID: {photo_id}")
+    else:
+        await update.message.reply_text("❌ Please reply to a photo with /setauthorphoto to set it as the mentor's image.")
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.message.from_user.id
+    
+    # Check for Parent Deep Link first
+    args = context.args
+    if args and args[0].startswith("parent_"):
+        ensure_user(uid)
+        student_uid = args[0].split("_")[1]
+        student = get_student_by_telegram(int(student_uid))
+        if student:
+            upd_user(uid, {"step": f"parent_lang_select_{student_uid}"})
+            await update.message.reply_text(
+                f"Pranam! Aap {student['name']} ke parent hain. ✨\n\nReports ke liye apni pasandida bhasha (language) select karein:",
+                reply_markup=ReplyKeyboardMarkup(PARENT_LANGUAGE_OPTIONS, resize_keyboard=True)
+            )
+            return
+
     if is_admin_user(uid):
         await update.message.reply_text("Admin mode active. Use teacher group claims and private DM for solving.")
         return
@@ -5119,16 +5195,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ensure_user(uid)
     u = get_user(uid)
 
-    if int(u["is_blocked"]) == 1:
+    if int(u.get("is_blocked") or 0) == 1:
         await update.message.reply_text(blocked_message())
         return
     
-    if int(u["awaiting_rating"]) == 1:
+    # SHOW LAUNCH SCREEN FOR NEW USERS
+    if not u.get("saw_launch_screen"):
+        await send_launch_screen(update, context)
+        upd_user(uid, {"saw_launch_screen": True})
+        await asyncio.sleep(1)
+
+    if int(u.get("awaiting_rating") or 0) == 1:
         await update.message.reply_text("Feedback ⭐ pehle dijiye (1-10):", reply_markup=ReplyKeyboardMarkup(RATING_OPTIONS, resize_keyboard=True))
         return
     
     # AUTO-SKIP: Check if profile complete
-    if int(u["profile_complete"]) == 0:
+    if int(u.get("profile_complete") or 0) == 0:
         # Check if user exists in portal (Telegram ID match)
         portal_user = check_telegram_user_in_portal(uid)
         
@@ -6876,6 +6958,7 @@ def main():
     print("✅ Flask thread started")
 
     init_db()
+    setup_launch_content()
     app = ApplicationBuilder().token(BOT_TOKEN).post_init(post_init).build()
     non_command_messages = filters.PHOTO | filters.CONTACT | (filters.TEXT & ~filters.COMMAND)
 
@@ -6898,6 +6981,7 @@ def main():
     app.add_handler(CommandHandler("addteacher", add_teacher), group=0)
     app.add_handler(CommandHandler("viewimg", viewimg), group=0)
     app.add_handler(CommandHandler("uturn", handle_uturn), group=0)
+    app.add_handler(CommandHandler("setauthorphoto", set_author_photo), group=0)
 
     app.add_handler(CallbackQueryHandler(handle_callback_query), group=0)
     app.add_handler(MessageHandler(filters.Chat(GROUP_CHAT_ID) & non_command_messages, handle_group_reply), group=0)
