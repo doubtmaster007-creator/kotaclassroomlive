@@ -5223,13 +5223,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-    if is_admin_user(uid):
-        await update.message.reply_text("Admin mode active. Use teacher group claims and private DM for solving.")
-        return
-    
     ensure_user(uid)
     u = get_user(uid)
 
+    # Admin check moved down: Only show admin message if they HAVE seen launch screen AND profile is complete
+    # This allows admins to test the fresh user flow.
+    if is_admin_user(uid) and u.get("saw_launch_screen") and int(u.get("profile_complete") or 0) == 1:
+        await update.message.reply_text("Admin mode active. Use teacher group claims and private DM for solving.")
+        return
+    
     if int(u.get("is_blocked") or 0) == 1:
         await update.message.reply_text(blocked_message())
         return
