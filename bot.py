@@ -2785,7 +2785,11 @@ async def handle_parent_steps(update: Update, context: ContextTypes.DEFAULT_TYPE
             
             # Notify student
             try:
-                await context.bot.send_message(chat_id=student_uid, text="✅ Aapke parent ne pairing code verify kar diya hai! Registration complete.")
+                await context.bot.send_message(
+                    chat_id=student_uid, 
+                    text="✅ Aapke parent ne pairing code verify kar diya hai! Registration complete. Mentorship Dashboard active ho gaya hai.",
+                    reply_markup=ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True)
+                )
             except: pass
         else:
             await update.message.reply_text("❌ Pairing code galat hai. Phirse try karein ya sahi code bache se puchein.")
