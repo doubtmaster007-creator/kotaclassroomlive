@@ -4518,8 +4518,13 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
 
     if step == "mentor_timetable_date":
         # Handle Yes/No for existing timetable
-        if text in ["Yes", "No"]:
+        if text in ["Yes", "No", "Back"]:
             temp = get_mentorship_temp(u)
+            if text == "Back" or text == "No":
+                upd_user(uid, {"step": "mentor_ready"})
+                await update.message.reply_text("Theek hai! Dashboard par wapas chalte hain.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True))
+                return True
+            
             if text == "Yes":
                 target_date = temp.get("timetable_target_date")
                 day_name = temp.get("timetable_target_day")
@@ -4529,10 +4534,6 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
                     "Example: Physics 9 am, Chemistry 11 am. Agar class nahi hai toh 'Off'.",
                     reply_markup=ReplyKeyboardMarkup([["Off"], ["Back", "Ask Doubt"]], resize_keyboard=True)
                 )
-                return True
-            else:
-                upd_user(uid, {"step": "mentor_ready"})
-                await update.message.reply_text("Theek hai! Dashboard par wapas chalte hain.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True))
                 return True
 
         try:
@@ -4586,6 +4587,14 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
             logger.warning(f"❌ Student profile not found for user {uid}")
             await update.message.reply_text("Student profile nahi mila. Wapas register karein ya /start karein.")
             upd_user(uid, {"step": "ready_for_new_doubt"})
+            return True
+
+        if text == "Back":
+            upd_user(uid, {"step": "mentor_timetable_date"})
+            await update.message.reply_text(
+                "Theek hai, kis din ka timetable update karna chahte hain? 📅\nExample: 30/04/2026",
+                reply_markup=ReplyKeyboardMarkup([["Back", "Ask Doubt"]], resize_keyboard=True)
+            )
             return True
 
         # Use date from temp
@@ -4649,9 +4658,10 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         
         student = student or get_student(u.get("mentorship_student_id"))
         if text == "Back":
+            target_date_str = temp.get("timetable_target_date")
             upd_user(uid, {"step": "mentor_daily_timetable_update"})
             await update.message.reply_text(
-                "Theek hai, timetable phir se bhejiye.\nExample: Physics 9 am, Chemistry 11 am.",
+                f"Theek hai, {target_date_str} ka timetable phir se bhejiye.\nExample: Physics 9 am, Chemistry 11 am.",
                 reply_markup=ReplyKeyboardMarkup([["Off"], ["Back", "Ask Doubt"]], resize_keyboard=True)
             )
             return True
