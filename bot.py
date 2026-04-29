@@ -4291,6 +4291,7 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         return True
 
     step = u.get("step") or ""
+    logger.info(f"DEBUG: mentorship_handler called for {uid}. Step: {step}, Text: '{text}'")
     temp = get_mentorship_temp(u)
     student = get_student_by_telegram(uid)
     parent_student = get_student_by_parent_telegram(uid)
@@ -4539,6 +4540,7 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         return True
 
     if step == "mentor_timetable_date":
+        await update.message.reply_text(f"DEBUG: mentorship_handler - Step: {step}, Input: {text}")
         # Handle Yes/No for existing timetable
         if text in ["Yes", "No", "Back"]:
             temp = get_mentorship_temp(u)
@@ -4575,6 +4577,7 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
                 return True
 
         try:
+            logger.info(f"DEBUG: Processing date input: '{text}'")
             d = datetime.strptime(text, "%d/%m/%Y")
             d_date = d.date()
             if d_date <= today_ist_date():
@@ -4583,7 +4586,11 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
             day_name = d.strftime("%A")
             
             # Check if timetable already exists for this day
-            student = get_student(u.get("mentorship_student_id"))
+            student = get_student_by_telegram(uid)
+            if not student:
+                await update.message.reply_text("❌ Student profile not found. Please register first.")
+                return True
+                
             c = db(); cur = db_cursor(c)
             cur.execute("SELECT id FROM weekly_timetable WHERE student_id=%s AND day_of_week=%s", (student["id"], day_name))
             exists = cur.fetchone()
@@ -4615,12 +4622,15 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
             )
         except ValueError:
             await update.message.reply_text("❌ Invalid format. Please use DD/MM/YYYY (e.g., 28/04/2026).")
+        except Exception as e:
+            logger.error(f"Error in mentor_timetable_date: {e}", exc_info=True)
+            await update.message.reply_text(f"❌ Something went wrong: {str(e)}")
         return True
 
     if step == "mentor_daily_timetable_update":
         logger.info(f"🔹 TIMETABLE INPUT - User {uid}: '{text[:100]}'")
         
-        student = student or get_student(u.get("mentorship_student_id"))
+        student = get_student_by_telegram(uid)
         if not student:
             logger.warning(f"❌ Student profile not found for user {uid}")
             await update.message.reply_text("Student profile nahi mila. Wapas register karein ya /start karein.")
@@ -6105,6 +6115,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await timetable_command(update, context)
         return
 
+    logger.info(f"DEBUG: handle_user calling mentorship_handler for {uid}")
     if await handle_mentorship_message(update, context, u):
         return
 
