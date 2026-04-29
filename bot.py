@@ -70,18 +70,18 @@ SUBJECT_OPTIONS = [["Physics", "Chemistry", "Mathematics", "Biology"], ["Cancel 
 RATING_OPTIONS = [["10", "9", "8", "7", "6"], ["5", "4", "3", "2", "1"], ["Cancel"]]  # Issue #3: Added Cancel
 NEW_DOUBT_OPTIONS = [["Ask Doubt"]]
 MENTORSHIP_ENTRY_OPTIONS = [["Ask Doubt", "My Mentorship"], ["Backlogs", "Others"]]
-MENTORSHIP_GOAL_OPTIONS = [["Goal A", "Goal B"], ["Back", "Ask Doubt"]]
+MENTORSHIP_TARGET_OPTIONS = [["Mentorship", "Backlog Coverage"], ["Back", "Ask Doubt"]]
 EXAM_TARGET_OPTIONS = [["Mains", "Adv", "Boards", "NEET"], ["Back", "Ask Doubt"]]
 PARENT_LANGUAGE_OPTIONS = [["Hindi"], ["Marathi"], ["English"], ["Tamil", "Kannada"], ["Back"]]  # Issue #13: Changed from "Skip/Cancel" to "Back"
 CHILD_RELATION_OPTIONS = [["Son", "Daughter"], ["Back"]]  # Issue #13: Changed from "Cancel Registration" to "Back"
 YES_NO_OPTIONS = [["Yes", "No"], ["Back"]]  # Issue #11, #13: Changed from "Cancel Registration" to "Back"
 NO_OPTIONS = [
     ["1. Explain Concept Better"],
-    ["2. Send to Doubt Guru"],
+    ["2. Send to MENTORA"],
     ["Cancel"]
 ]
 DOUBT_SOLVED_OPTIONS = [["Yes", "No"]]
-DOUBT_GURU_CHOOSE_OPTIONS = [
+MENTORA_CHOOSE_OPTIONS = [
     ["Select your Faculty"],
     ["Send in Group (Fast Process)"],
     ["Back"]
@@ -125,7 +125,7 @@ BACKLOG_SUBMENU_KB = [
 # Backlog target level options
 BACKLOG_LEVEL_OPTIONS = [["Board", "JEE Mains"], ["JEE Adv", "NEET"], ["Back"]]
 
-# Preferred study time slots (Issue #7)
+# Preferred self study time slots (Issue #7)
 PREFERRED_TIME_SLOTS = [
     ["Morning", "Evening"],
     ["Back", "Ask Doubt"]
@@ -144,7 +144,7 @@ Important rules:
    - HW from today's class
    - Notes revision from today's class
 2. Then include pending tasks that are 3 days old or less.
-3. If time permits, include backlog tasks based on their target_level (e.g., JEE Adv needs more depth), completion_days, and hours_per_day. Use type BACKLOG for these.
+3. Always check for pending backlogs. If time permits, include backlog tasks based on their target_level (e.g., JEE Adv needs more depth), completion_days, and hours_per_day. Use type BACKLOG for these. Balance homework and backlogs efficiently.
 4. If any pending task exists, do not create any extra improvement task.
 5. Same-day incomplete or skipped tasks must not affect the timing of other same-day tasks.
 6. Use only the provided free slots and available time.
@@ -1393,6 +1393,7 @@ SUBJECT_PROMPTS = {
     "physics": PHYSICS_PROMPT,
     "chemistry": CHEMISTRY_PROMPT,
     "mathematics": MATH_PROMPT,
+    "biology": BIOLOGY_PROMPT,
 }
 
 # Question-type specific strategy prompts
@@ -1419,6 +1420,48 @@ MULTIPLE CORRECT ANSWER — MANDATORY STRATEGY:
 - Common trap: partial statements true in general but have exception in this case.
   Always check exceptions before marking CORRECT.
 """
+
+BIOLOGY_PROMPT = """
+You are an exceptionally knowledgeable and experienced NEET Biology teacher with deep expertise in CBSE NCERT curriculum for Classes 11 and 12.
+
+TEACHING STYLE:
+1. Explanation Approach:
+- Break complex concepts into simple, digestible parts.
+- Use analogies and real-world examples.
+- Connect theoretical concepts to practical/clinical applications.
+- Highlight NCERT diagrams and their importance.
+- Explain "why" before "how".
+
+2. NEET-Focused Strategy:
+- Prioritize high-frequency topics that appear repeatedly in NEET.
+- Point out common misconceptions and mistakes students make.
+- Provide memory tricks and mnemonics (e.g., PMAT for Mitosis).
+- Explain which topics have higher weightage (MCQ pattern).
+- Connect concepts across chapters (inter-chapter links).
+
+3. Doubt-Solving Method:
+- Acknowledge the confusion point.
+- Clarify the concept from basics.
+- Explain using multiple approaches (visual, verbal, example-based).
+- Connect to NEET question patterns (Diagram-based, Matching, Assertion-Reason).
+- Provide practice direction.
+
+CORE TOPICS:
+- Cell Biology (Structure, Functions, Division)
+- Genetics and Molecular Biology (Lac Operon, DNA Replication, etc.)
+- Ecology and Environmental Biology
+- Human Physiology (Digestion, Circulation, Excretion, etc.)
+- Plant Physiology and Anatomy (Photosynthesis, Respiration, etc.)
+- Reproduction, Development, Evolution, and Diversity of Life.
+
+RULES:
+- Provide NCERT-aligned explanations.
+- Use diagrams and visual descriptions.
+- Explain common misconceptions.
+- Do NOT provide shortcuts that ignore fundamentals.
+- Do NOT encourage rote learning without understanding.
+"""
+
 
 MULTI_STEP_YIELD_STRATEGY = """
 MULTI-STEP REACTION WITH YIELD — MANDATORY STRATEGY:
@@ -2462,7 +2505,7 @@ def compute_free_slots(slots: List[Dict[str, Any]], preferred_study_time: Option
         hours_target = 2
     end_hour = min(base_time.hour + hours_target, 23)
     free_slots.append({
-        "label": "Primary Study",
+        "label": "Primary Self Study",
         "start": base_time.strftime("%H:%M"),
         "end": f"{end_hour:02d}:{base_time.minute:02d}",
         "minutes": hours_target * 60,
@@ -2834,7 +2877,7 @@ def chapter_code(ch):
     return x[:6] if x else "GEN"
 
 def subj_code(s):
-    return {"physics": "PHY", "chemistry": "CHE", "mathematics": "MTH"}.get((s or "").lower(), "GEN")
+    return {"physics": "PHY", "chemistry": "CHE", "mathematics": "MTH", "biology": "BIO"}.get((s or "").lower(), "GEN")
 
 def strm_code(s):
     m = {
@@ -2845,6 +2888,7 @@ def strm_code(s):
         "practical physics":"PPH","practical chemistry":"PCH",
         "vector and 3d":"VEC","probability and statistics":"PRB",
         "trigonometry":"TRG","modern physics":"MOD",
+        "11th bio": "B11", "12th bio": "B12"
     }
     return m.get((s or "").lower(), "GEN")
 
@@ -2877,16 +2921,8 @@ def get_system_prompt(subject: str, stream: str = "", chapter: str = "", goal: s
     chapter = (chapter or "").lower()
     goal = (goal or "").lower()
 
-    if goal == "neet" and subject == "biology":
-        return f"""You are a biology tutor specializing in NEET preparation.
-Use NCERT Biology curriculum (Class 11 & 12, CBSE board).
-Explain all concepts with:
-- NEET exam focus
-- Relevant diagrams/structures
-- Previous year questions context
-- Important for exam tips
-
-{COMMON_PROMPT}""".strip()
+    if subject == "biology":
+        return f"{COMMON_PROMPT}\n\n{BIOLOGY_PROMPT}".strip()
 
     if chapter == "salt analysis":
         return f"{COMMON_PROMPT}\n\n{SALT_ANALYSIS_PROMPT}".strip()
@@ -3476,14 +3512,14 @@ async def deliver_teacher_solution(context: ContextTypes.DEFAULT_TYPE, qid: str,
 
     uid = int(t["user_id"])
     if photo_id:
-        out_caption = f"Doubt Guru Solution for {qid}"
+        out_caption = f"MENTORA Solution for {qid}"
         if caption.strip():
             out_caption += f"\n\n{caption.strip()}"
         if feedback.strip():
             out_caption += f"\n\nTeacher Feedback: {feedback.strip()}"
         await context.bot.send_photo(chat_id=uid, photo=photo_id, caption=out_caption)
     else:
-        message = f"Doubt Guru Solution for {qid}:\n\n{solution_text.strip()}"
+        message = f"MENTORA Solution for {qid}:\n\n{solution_text.strip()}"
         if feedback.strip():
             message += f"\n\nTeacher Feedback:\n{feedback.strip()}"
         await context.bot.send_message(chat_id=uid, text=message)
@@ -3886,7 +3922,7 @@ async def run_mentorship_scheduler(bot):
                         completion = calculate_completion_percentage(tasks)
                         await bot.send_message(
                             chat_id=int(student["telegram_id"]),
-                            text=f"📊 *Daily Study Report* ({now_dt.strftime('%d %b')})\n\n"
+                            text=f"📊 *Daily Self Study Report* ({now_dt.strftime('%d %b')})\n\n"
                                  f"🎯 Goal: {student.get('exam_target', 'JEE')}\n"
                                  f"✅ Status: {completion}% Completed\n\n"
                                  f"Great job today! Let's aim higher tomorrow! 🚀",
@@ -4238,7 +4274,7 @@ async def generate_ai_task_planner(update, context, student):
     except Exception as e:
         logger.error(f"AI Planner generation failed: {e}")
         await update.message.reply_text("AI Task Planner generation failed. Using fallback plan.")
-        planner = {"tasks": [{"type": "HW", "subject": "General", "topic": "Homework", "description": "Complete all submitted homework", "priority": "critical", "estimated_minutes": 180, "source": "CLASS", "scheduled_slot_label": "Study Slot"}]}
+        planner = {"tasks": [{"type": "HW", "subject": "General", "topic": "Homework", "description": "Complete all submitted homework", "priority": "critical", "estimated_minutes": 180, "source": "CLASS", "scheduled_slot_label": "Self Study Slot"}]}
 
     delete_pending_tasks_for_day(student["id"], today_ist_date())
     log = get_or_create_daily_log(student["id"], today_ist_date())
@@ -4443,13 +4479,13 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         save_mentorship_temp(uid, temp)
         upd_user(uid, {"step": "mentor_preferred_study_time"})
         # Issue #7: Changed to slot options instead of time format
-        await update.message.reply_text("Select your preferred study time slot:", reply_markup=ReplyKeyboardMarkup(PREFERRED_TIME_SLOTS, resize_keyboard=True))
+        await update.message.reply_text("Select your preferred self study time slot:", reply_markup=ReplyKeyboardMarkup(PREFERRED_TIME_SLOTS, resize_keyboard=True))
         return True
 
     if step == "mentor_preferred_study_time":
         # Issue #7: Changed from time format to slot options (Morning/Evening)
         if text not in ["Morning", "Evening"]:
-            await update.message.reply_text("Select your preferred study time slot:", reply_markup=ReplyKeyboardMarkup(PREFERRED_TIME_SLOTS, resize_keyboard=True))
+            await update.message.reply_text("Select your preferred self study time slot:", reply_markup=ReplyKeyboardMarkup(PREFERRED_TIME_SLOTS, resize_keyboard=True))
             return True
         
         temp.setdefault("reg_data", {})["preferred_study_time"] = text
@@ -4466,26 +4502,11 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         val = int(num_match.group(1))
         temp.setdefault("reg_data", {})["self_study_hours"] = val
         save_mentorship_temp(uid, temp)
-        upd_user(uid, {"step": "mentor_goal_mode"})
-        await update.message.reply_text(
-            "Goal mode choose karo:\n"
-            "🎯 Goal A: Focus on Daily Time Management\n"
-            "🚀 Goal B: Focus on Backlog Completion",
-            reply_markup=ReplyKeyboardMarkup(MENTORSHIP_GOAL_OPTIONS, resize_keyboard=True)
-        )
-        return True
-
-    if step == "mentor_goal_mode":
-        if text not in {"Goal A", "Goal B"}:
-            await update.message.reply_text("Goal A ya Goal B choose karo.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_GOAL_OPTIONS, resize_keyboard=True))
-            return True
-        goal_value = "A" if text == "Goal A" else "B"
-        temp.setdefault("reg_data", {})["goal"] = goal_value
-        temp["reg_data"]["last_active_goal"] = goal_value
-        save_mentorship_temp(uid, temp)
         upd_user(uid, {"step": "mentor_batch"})
         await update.message.reply_text("Batch name bhejo.", reply_markup=ReplyKeyboardMarkup([["Back", "Ask Doubt"]], resize_keyboard=True))
         return True
+
+
 
     if step == "mentor_batch":
         if text == "Back":
@@ -4509,7 +4530,7 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         # Validate phone format
         clean_phone = re.sub(r"\D", "", text)
         if not (10 <= len(clean_phone) <= 13):
-            await update.message.reply_text("Valid Phone Number bhejo (e.g., 9876543210) ya Skip likho.")
+            await update.message.reply_text("Valid Parent Telegram Number bhejo (e.g., 9876543210) ya Skip likho.")
             return True
         
         # Buffer data
@@ -5059,8 +5080,8 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
                 planner = call_json_prompt(DAILY_TASK_PLANNER_PROMPT, payload)
             except Exception:
                 planner = {"tasks": [
-                    {"type": "HW", "subject": slot_info.get("subject", "General"), "topic": "Today's HW", "description": text, "priority": "critical", "estimated_minutes": 45, "source": "CLASS", "scheduled_slot_label": "Primary Study"},
-                    {"type": "REVISION", "subject": slot_info.get("subject", "General"), "topic": "Today's Notes", "description": f"Revise {slot_info.get('subject', 'General')} notes taught today.", "priority": "high", "estimated_minutes": 30, "source": "CLASS", "scheduled_slot_label": "Primary Study"}
+                    {"type": "HW", "subject": slot_info.get("subject", "General"), "topic": "Today's HW", "description": text, "priority": "critical", "estimated_minutes": 45, "source": "CLASS", "scheduled_slot_label": "Primary Self Study"},
+                    {"type": "REVISION", "subject": slot_info.get("subject", "General"), "topic": "Today's Notes", "description": f"Revise {slot_info.get('subject', 'General')} notes taught today.", "priority": "high", "estimated_minutes": 30, "source": "CLASS", "scheduled_slot_label": "Primary Self Study"}
                 ], "needs_overload_check": False}
 
             # Logic for overload check (Issue: Ask student for extra effort)
@@ -5070,7 +5091,7 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
                 save_mentorship_temp(uid, temp)
                 await update.message.reply_text(
                     "⚠️ Aaj aapka load thoda zyada hai! Backlog aur regular kaam dono cover karne ke liye free time kam pad raha hai.\n\n"
-                    "Kya aap aaj thoda extra effort (extra study hours) daalne ke liye ready hain?",
+                    "Kya aap aaj thoda extra effort (extra self study hours) daalne ke liye ready hain?",
                     reply_markup=ReplyKeyboardMarkup([["Yes, I'm Ready", "No, keep it light"], ["Back"]], resize_keyboard=True)
                 )
                 return True
@@ -5254,11 +5275,7 @@ async def send_launch_screen(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await update.message.reply_text(author_desc, parse_mode="Markdown")
 
 def setup_launch_content():
-    bot_desc = """🤖 *MENTORA - Bot Launch Screen*
-
----
-
-*What is MENTORA?*
+    bot_desc = """*What is MENTORA?*
 Your *24/7 AI Study Companion* for JEE Mains, JEE Advanced, NEET, and 12th Board Exams.
 *Powered by 12+ years of teaching expertise from Kota's top institutions.*
 
@@ -5266,7 +5283,7 @@ Your *24/7 AI Study Companion* for JEE Mains, JEE Advanced, NEET, and 12th Board
 
 *What Can MENTORA Do?*
 ✨ *Solve Doubts Instantly* - Image-based doubt solving for Physics, Chemistry, Biology, Math
-📚 *Create Daily Plans* - AI-generated personalized study schedules
+📚 *Create Daily Plans* - AI-generated personalized self study schedules
 📋 *Track Progress* - Daily reports showing what you completed
 🎯 *Smart Reminders* - Class reminders, homework alerts, task notifications
 ⏰ *Manage Homework* - Sequential homework tracking subject-by-subject
@@ -5444,7 +5461,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # User already registered
     upd_user(uid, {"step": "ready_for_new_doubt", "awaiting_feedback": 0, "awaiting_no_choice": 0})
     await update.message.reply_text(
-        "Welcome to MENTORA! 🎓\n\nAsk Doubt select karein AI aur Doubt Guru se solution paane ke liye.\nYa My Mentorship choose karein systematic study ke liye.",
+        "Welcome to MENTORA! 🎓\n\nAsk Doubt select karein AI aur MENTORA se solution paane ke liye.\nYa My Mentorship choose karein systematic study ke liye.",
         reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True)
     )
 
@@ -6221,15 +6238,11 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         if step == "mentor_self_study_hours":
             upd_user(uid, {"step": "mentor_preferred_study_time"})
-            await update.message.reply_text("Select your preferred study time slot:", reply_markup=ReplyKeyboardMarkup(PREFERRED_TIME_SLOTS, resize_keyboard=True))
-            return
-        if step == "mentor_goal_mode":
-            upd_user(uid, {"step": "mentor_self_study_hours"})
-            await update.message.reply_text("Daily self study hours kitne target karte ho?", reply_markup=ReplyKeyboardMarkup([["Back", "Ask Doubt"]], resize_keyboard=True))
+            await update.message.reply_text("Select your preferred self study time slot:", reply_markup=ReplyKeyboardMarkup(PREFERRED_TIME_SLOTS, resize_keyboard=True))
             return
         if step == "mentor_batch":
-            upd_user(uid, {"step": "mentor_goal_mode"})
-            await update.message.reply_text("Goal mode choose karo.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_GOAL_OPTIONS, resize_keyboard=True))
+            upd_user(uid, {"step": "mentor_self_study_hours"})
+            await update.message.reply_text("Daily self study hours kitne target karte ho?", reply_markup=ReplyKeyboardMarkup([["Back", "Ask Doubt"]], resize_keyboard=True))
             return
         if step == "mentor_parent_id":
             upd_user(uid, {"step": "mentor_batch"})
@@ -6492,9 +6505,9 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("Error while generating detailed explanation.")
             return
 
-        if text == "2. Send to Doubt Guru":
+        if text == "2. Send to MENTORA":
             upd_user(uid, {"awaiting_no_choice":0, "step": "choose_doubt_guru_mode"})
-            await update.message.reply_text("Kaise aage badhna chahte hain?", reply_markup=ReplyKeyboardMarkup(DOUBT_GURU_CHOOSE_OPTIONS, resize_keyboard=True))
+            await update.message.reply_text("Kaise aage badhna chahte hain?", reply_markup=ReplyKeyboardMarkup(MENTORA_CHOOSE_OPTIONS, resize_keyboard=True))
             return
 
     if u.get("step") == "choose_doubt_guru_mode" and text:
@@ -6506,7 +6519,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         qid = u.get("current_qid")
         t = get_ticket(qid)
         if t and t["status"] == "pending_teacher":
-            return await update.message.reply_text("Already sent to Doubt Guru. Please wait.")
+            return await update.message.reply_text("Already sent to MENTORA. Please wait.")
             
         user_type = u.get("user_type", "free")
         is_paid = (user_type == "premium" or int(u.get("is_paid", 0) or 0) == 1)
@@ -6514,7 +6527,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         now_ist = datetime.now(IST)
         if (now_ist.hour >= 22 or now_ist.hour < 10) and not is_admin_user(uid):
             upd_user(uid, {"step":"subject"})
-            await update.message.reply_text("Doubt Guru routing disabled: Faculty are offline from 10 PM to 10 AM. Only AI flow is active.")
+            await update.message.reply_text("MENTORA routing disabled: Faculty are offline from 10 PM to 10 AM. Only AI flow is active.")
             return await update.message.reply_text("Ask Doubt ya My Mentorship choose karo.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
 
         if not is_paid:
@@ -6529,20 +6542,20 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not is_paid:
                 lifetime_used = int(u.get("doubt_guru_lifetime_used") or 0)
                 upd_user(uid, {"doubt_guru_lifetime_used": lifetime_used + 1})
-                await update.message.reply_text(f"Notice: You are using Free Doubt Guru quota ({5 - lifetime_used - 1} left).")
+                await update.message.reply_text(f"Notice: You are using Free MENTORA quota ({5 - lifetime_used - 1} left).")
 
             qtxt = u.get("question_text", "")
             qphoto = u.get("question_photo")
             claim_code = claim_code_from_qid(qid)
             if qphoto:
-                sent = await context.bot.send_photo(chat_id=GROUP_CHAT_ID, photo=qphoto, caption=f"New Doubt Guru Ticket\nCode: {claim_code}\nQID: {qid}\nUse /claim {claim_code}\n\nQuestion: {qtxt}")
+                sent = await context.bot.send_photo(chat_id=GROUP_CHAT_ID, photo=qphoto, caption=f"New MENTORA Ticket\nCode: {claim_code}\nQID: {qid}\nUse /claim {claim_code}\n\nQuestion: {qtxt}")
             else:
-                sent = await context.bot.send_message(chat_id=GROUP_CHAT_ID, text=f"New Doubt Guru Ticket\nCode: {claim_code}\nQID: {qid}\nUse /claim {claim_code}\n\nQuestion:\n{qtxt}")
+                sent = await context.bot.send_message(chat_id=GROUP_CHAT_ID, text=f"New MENTORA Ticket\nCode: {claim_code}\nQID: {qid}\nUse /claim {claim_code}\n\nQuestion:\n{qtxt}")
             upsert_ticket({"qid": qid, "user_id": uid, "status":"pending_teacher", "created_at":now_iso(), "group_msg_id":sent.message_id, "claimed_by":None, "claimed_by_name":None, "reply_count":0, "reopen_count":0, "claim_code": claim_code, "claim_expires_at": None})
             upd_doubt(qid, {"status":"pending_teacher"})
             start_reminder(context.bot, qid)
             upd_user(uid, {"step":"subject"})
-            return await update.message.reply_text(f"Sent to Doubt Guru group.\nQID: {qid}", reply_markup=ReplyKeyboardRemove())
+            return await update.message.reply_text(f"Sent to MENTORA group.\nQID: {qid}", reply_markup=ReplyKeyboardRemove())
 
         if text == "Select your Faculty":
             subj = (u.get("subject") or "").lower()
@@ -6561,7 +6574,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 faculties.append(t_row)
 
             if not faculties:
-                return await update.message.reply_text("Filhal koi specific faculty available nahi hai. Please use 'Send in Group'.", reply_markup=ReplyKeyboardMarkup(DOUBT_GURU_CHOOSE_OPTIONS, resize_keyboard=True))
+                return await update.message.reply_text("Filhal koi specific faculty available nahi hai. Please use 'Send in Group'.", reply_markup=ReplyKeyboardMarkup(MENTORA_CHOOSE_OPTIONS, resize_keyboard=True))
 
             fac_options = []
             for f in faculties:
@@ -6574,7 +6587,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Please select a faculty member:", reply_markup=ReplyKeyboardMarkup(fac_kb, resize_keyboard=True))
             return
 
-        await update.message.reply_text("Please choose from buttons.", reply_markup=ReplyKeyboardMarkup(DOUBT_GURU_CHOOSE_OPTIONS, resize_keyboard=True))
+        await update.message.reply_text("Please choose from buttons.", reply_markup=ReplyKeyboardMarkup(MENTORA_CHOOSE_OPTIONS, resize_keyboard=True))
         return
 
         await update.message.reply_text("Please choose from options.", reply_markup=ReplyKeyboardMarkup(NO_OPTIONS, resize_keyboard=True))
@@ -6590,7 +6603,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
         if text == "Back":
             upd_user(uid, {"step": "choose_doubt_guru_mode"})
-            await update.message.reply_text("Kaise aage badhna chahte hain?", reply_markup=ReplyKeyboardMarkup(DOUBT_GURU_CHOOSE_OPTIONS, resize_keyboard=True))
+            await update.message.reply_text("Kaise aage badhna chahte hain?", reply_markup=ReplyKeyboardMarkup(MENTORA_CHOOSE_OPTIONS, resize_keyboard=True))
             return
             
         c = db(); cur = db_cursor(c)
@@ -6634,9 +6647,9 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             upd_ticket(qid, {"claimed_by": None, "claimed_by_name": None, "claim_expires_at": None, "assigned_teacher_id": None})
             clear_teacher_session(selected_fac["teacher_id"])
             if qphoto:
-                sent = await context.bot.send_photo(chat_id=GROUP_CHAT_ID, photo=qphoto, caption=f"New Doubt Guru Ticket (Rerouted)\nCode: {claim_code}\nQID: {qid}\nUse /claim {claim_code}\n\nQuestion: {qtxt}")
+                sent = await context.bot.send_photo(chat_id=GROUP_CHAT_ID, photo=qphoto, caption=f"New MENTORA Ticket (Rerouted)\nCode: {claim_code}\nQID: {qid}\nUse /claim {claim_code}\n\nQuestion: {qtxt}")
             else:
-                sent = await context.bot.send_message(chat_id=GROUP_CHAT_ID, text=f"New Doubt Guru Ticket (Rerouted)\nCode: {claim_code}\nQID: {qid}\nUse /claim {claim_code}\n\nQuestion:\n{qtxt}")
+                sent = await context.bot.send_message(chat_id=GROUP_CHAT_ID, text=f"New MENTORA Ticket (Rerouted)\nCode: {claim_code}\nQID: {qid}\nUse /claim {claim_code}\n\nQuestion:\n{qtxt}")
             upd_ticket(qid, {"group_msg_id": sent.message_id})
         
         start_reminder(context.bot, qid)
@@ -6727,7 +6740,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "profile_complete": 1,
                 "step": "ready_for_new_doubt"
             })
-            await update.message.reply_text("✅ Profile complete! Welcome to Doubt Guru 🚀")
+            await update.message.reply_text("✅ Profile complete! Welcome to MENTORA 🚀")
             await update.message.reply_text(
                 "Ask Doubt ya My Mentorship me se choose karein 👇",
                 reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True)
@@ -6751,7 +6764,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if step == "subject":
         s = text.lower()
-        if s not in {"physics","chemistry","mathematics"}:
+        if s not in {"physics", "chemistry", "mathematics", "biology"}:
             await update.message.reply_text("Please choose subject from buttons.", reply_markup=ReplyKeyboardMarkup(SUBJECT_OPTIONS, resize_keyboard=True))
             return
         upd_user(uid, {"subject":s, "step":"stream"})
@@ -6855,7 +6868,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             auto_send_to_teacher = explicit_teacher_review
             review_note = ""
             if visual_review_risk and not explicit_teacher_review:
-                review_note = "Note: Is image-based doubt me reading precision sensitive ho sakti hai. Agar answer unsolved lage, aap 'Send to Doubt Guru' choose kar sakte ho."
+                review_note = "Note: Is image-based doubt me reading precision sensitive ho sakti hai. Agar answer unsolved lage, aap 'Send to MENTORA' choose kar sakte ho."
 
             qid = gen_qid(u, "H" if needs_teacher else diff)
             upd_user(uid, {"current_qid": qid, "last_answer": answer})
@@ -6883,7 +6896,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if not is_paid:
                     upd_doubt(qid, {"status": "ai_done"})
                     await update.message.reply_text(f"QID: {qid}\n\n{answer}")
-                    await update.message.reply_text("⚠️ This doubt requires a Doubt Guru's review for 100% accuracy.\nNote: Auto-routing to Doubt Guru is disabled for Free accounts.")
+                    await update.message.reply_text("⚠️ This doubt requires MENTORA's review for 100% accuracy.\nNote: Auto-routing to MENTORA is disabled for Free accounts.")
                     upd_user(uid, {"step": "ready_for_new_doubt", "awaiting_feedback": 0})
                     await update.message.reply_text("Ask Doubt ya My Mentorship choose karo.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
                     return
@@ -6892,12 +6905,12 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if (now_ist.hour >= 22 or now_ist.hour < 10) and not is_admin_user(uid):
                     upd_doubt(qid, {"status": "ai_done"})
                     await update.message.reply_text(f"QID: {qid}\n\n{answer}")
-                    await update.message.reply_text("⚠️ This doubt requires a Doubt Guru's review, but faculty routing is disabled at night (10 PM - 10 AM). Only AI flow is active.")
+                    await update.message.reply_text("⚠️ This doubt requires MENTORA's review, but faculty routing is disabled at night (10 PM - 10 AM). Only AI flow is active.")
                     upd_user(uid, {"step": "ready_for_new_doubt", "awaiting_feedback": 0})
                     await update.message.reply_text("Ask Doubt ya My Mentorship choose karo.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
                     return
 
-                await update.message.reply_text(f"QID: {qid}\nIs doubt me accuracy-sensitive exception ho sakta hai, isliye we need to send it to a Doubt Guru.")
+                await update.message.reply_text(f"QID: {qid}\nIs doubt me accuracy-sensitive exception ho sakta hai, isliye we need to send it to MENTORA.")
                 subj = (u.get("subject") or "").lower()
                 strm = (u.get("stream") or "").lower()
                 c = db(); cur = db_cursor(c)
@@ -6917,7 +6930,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     fac_kb = [fac_options[i:i+2] for i in range(0, len(fac_options), 2)]
                     fac_kb.append(["⏭️ Skip"])
                     upd_user(uid, {"step": "select_faculty", "awaiting_feedback": 0})
-                    await update.message.reply_text("Please select a faculty member to send your doubt to, or tap Skip to ask all Doubt Gurus:", reply_markup=ReplyKeyboardMarkup(fac_kb, resize_keyboard=True))
+                    await update.message.reply_text("Please select a faculty member to send your doubt to, or tap Skip to ask MENTORA:", reply_markup=ReplyKeyboardMarkup(fac_kb, resize_keyboard=True))
                 else:
                     claim_code = claim_code_from_qid(qid)
                     if qphoto:
@@ -6940,7 +6953,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     })
                     start_reminder(context.bot, qid)
                     upd_user(uid, {"step": "ready_for_new_doubt", "awaiting_feedback": 0})
-                    await update.message.reply_text("Sent to Doubt Guru group directly.", reply_markup=ReplyKeyboardRemove())
+                    await update.message.reply_text("Sent to MENTORA group directly.", reply_markup=ReplyKeyboardRemove())
                 return
 
             await update.message.reply_text(f"QID: {qid}")
