@@ -5171,6 +5171,41 @@ async def set_author_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("❌ Please reply to a photo with /setauthorphoto to set it as the mentor's image.")
 
+async def reset_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.message.from_user.id
+    # Safety: Only owner/admin can use this for now
+    if not is_admin_user(uid):
+        return
+
+    c = db(); cur = db_cursor(c)
+    try:
+        # Get student_id first
+        cur.execute("SELECT id FROM students WHERE telegram_id=%s", (str(uid),))
+        student = cur.fetchone()
+        
+        if student:
+            sid = student["id"]
+            # Delete from all related tables
+            cur.execute("DELETE FROM tasks WHERE student_id=%s", (sid,))
+            cur.execute("DELETE FROM daily_logs WHERE student_id=%s", (sid,))
+            cur.execute("DELETE FROM backlogs WHERE student_id=%s", (sid,))
+            cur.execute("DELETE FROM reports WHERE student_id=%s", (sid,))
+            cur.execute("DELETE FROM weekly_timetable WHERE student_id=%s", (sid,))
+            cur.execute("DELETE FROM medical_leaves WHERE student_id=%s", (sid,))
+            cur.execute("DELETE FROM test_weeks WHERE student_id=%s", (sid,))
+            cur.execute("DELETE FROM students WHERE id=%s", (sid,))
+        
+        # Delete from users table
+        cur.execute("DELETE FROM users WHERE user_id=%s", (uid,))
+        c.commit()
+        await update.message.reply_text("✅ Your account has been completely reset. You are now a fresh user! Type /start to begin again.")
+    except Exception as e:
+        c.rollback()
+        logger.error(f"Reset failed: {e}")
+        await update.message.reply_text(f"❌ Reset failed: {e}")
+    finally:
+        c.close()
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.message.from_user.id
     
@@ -6982,6 +7017,7 @@ def main():
     app.add_handler(CommandHandler("viewimg", viewimg), group=0)
     app.add_handler(CommandHandler("uturn", handle_uturn), group=0)
     app.add_handler(CommandHandler("setauthorphoto", set_author_photo), group=0)
+    app.add_handler(CommandHandler("resetme", reset_me), group=0)
 
     app.add_handler(CallbackQueryHandler(handle_callback_query), group=0)
     app.add_handler(MessageHandler(filters.Chat(GROUP_CHAT_ID) & non_command_messages, handle_group_reply), group=0)
