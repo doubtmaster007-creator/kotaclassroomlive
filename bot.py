@@ -142,7 +142,7 @@ Important rules:
    - HW from today's class
    - Notes revision from today's class
 2. Then include pending tasks that are 3 days old or less.
-3. If time permits, include backlog tasks based on their target_level (e.g., JEE Adv needs more depth), completion_days, and hours_per_day.
+3. If time permits, include backlog tasks based on their target_level (e.g., JEE Adv needs more depth), completion_days, and hours_per_day. Use type BACKLOG for these.
 4. If any pending task exists, do not create any extra improvement task.
 5. Same-day incomplete or skipped tasks must not affect the timing of other same-day tasks.
 6. Use only the provided free slots and available time.
@@ -150,18 +150,20 @@ Important rules:
 8. Keep every task short, practical, and executable.
 9. If the total workload (HW + Backlogs) exceeds the available free time in the slots, still include the tasks but set needs_overload_check to true.
 10. Return valid JSON only. No markdown, no explanation, no extra text.
+11. estimated_minutes must be realistic: HW=45-60, REVISION=30-45, BACKLOG=60-90, PENDING=30-45.
+12. description must be a clear, actionable instruction in Hinglish (e.g., 'Newton ke 3 laws ke 15 questions solve karo').
 
 Return JSON in exactly this format:
 {
   "tasks": [
     {
-      "type": "HW|REVISION|PENDING|TEST_WEEK",
+      "type": "HW|REVISION|PENDING|BACKLOG|TEST_WEEK",
       "subject": "string",
       "topic": "string",
-      "description": "string",
+      "description": "string (clear actionable Hinglish instruction)",
       "priority": "medium|high|critical",
-      "estimated_minutes": 30,
-      "source": "CLASS|PENDING|TEST_WEEK",
+      "estimated_minutes": 45,
+      "source": "CLASS|PENDING|BACKLOG|TEST_WEEK",
       "scheduled_slot_label": "string"
     }
   ],
@@ -2709,7 +2711,8 @@ async def handle_parent_language(update: Update, context: ContextTypes.DEFAULT_T
     
     student_uid = int(step.split("_")[3])
     text = update.message.text
-    if text not in ["Hindi", "Marathi", "English"]:
+    VALID_LANGS = ["Hindi", "Marathi", "English", "Tamil", "Kannada"]
+    if text not in VALID_LANGS:
         await update.message.reply_text("Sahi bhasha select karein:", reply_markup=ReplyKeyboardMarkup(PARENT_LANGUAGE_OPTIONS, resize_keyboard=True))
         return True
     
@@ -4829,33 +4832,24 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
             await update.message.reply_text("Please choose: Yes, I'm Ready or No, keep it light.", reply_markup=ReplyKeyboardMarkup([["Yes, I'm Ready", "No, keep it light"], ["Back"]], resize_keyboard=True))
             return True
 
-        delete_pending_tasks_for_day(student["id"], today_ist_date())
-        log = get_or_create_daily_log(student["id"], today_ist_date())
-        created_lines = []
-        for item in tasks_to_create:
-            task = create_task({
-                "student_id": student["id"],
-                "daily_log_id": log["id"],
-                "type": item.get("type"),
-                "subject": item.get("subject"),
-                "topic": item.get("topic"),
-                "description": item.get("description"),
-                "status": "pending",
-                "priority": item.get("priority", "medium"),
-                "source": item.get("source", "CLASS"),
-                "scheduled_date": today_ist_date(),
-                "estimated_minutes": item.get("estimated_minutes", 30),
-                "mentor_instruction": temp.get("mentor_instruction"),
-                "ai_plan_source": "daily_task_planner",
-            })
-            created_lines.append(f"{str(task['id'])[:8]} | {task.get('subject')} | {task.get('description')}")
+        TYPE_EMOJI = {"HW": "📝", "REVISION": "📖", "BACKLOG": "🔁", "PENDING": "⏳", "TEST_WEEK": "🧪"}
+        PRIORITY_LABEL = {"critical": "🔴", "high": "🟡", "medium": "🟢"}
+        plan_lines = []
+        for idx, task in enumerate(tasks_to_create, 1):
+            mins = task.get('estimated_minutes', 30)
+            hrs = f"{mins // 60}h {mins % 60}m" if mins >= 60 else f"{mins}m"
+            emoji = TYPE_EMOJI.get(task.get('type', ''), '📌')
+            priority = PRIORITY_LABEL.get(task.get('priority', 'medium'), '🟢')
+            plan_lines.append(f"{idx}. {emoji} {priority} *{task.get('subject')}* — {task.get('description')} _({hrs})_")
         
         recalc_daily_log(student["id"], today_ist_date())
         temp.pop("pending_overload_planner", None)
         upd_user(uid, {"step": "mentor_ready"})
         save_mentorship_temp(uid, temp)
+        plan_text = "✅ *Aaj ka Plan Ready Hai!*\n━━━━━━━━━━━━━━━━━━\n\n" + "\n".join(plan_lines) + "\n\nAll the best for today! 💪"
         await update.message.reply_text(
-            f"✅ Plan created!\n\n" + "\n".join(created_lines) + "\n\nAll the best for today! 💪",
+            plan_text,
+            parse_mode="Markdown",
             reply_markup=ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True)
         )
         return True
@@ -4958,8 +4952,10 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
 
             delete_pending_tasks_for_day(student["id"], today_ist_date())
             log = get_or_create_daily_log(student["id"], today_ist_date())
-            created_lines = []
-            for item in planner.get("tasks", []):
+            TYPE_EMOJI = {"HW": "📝", "REVISION": "📖", "BACKLOG": "🔁", "PENDING": "⏳", "TEST_WEEK": "🧪"}
+            PRIORITY_LABEL = {"critical": "🔴", "high": "🟡", "medium": "🟢"}
+            plan_lines = []
+            for idx, item in enumerate(planner.get("tasks", []), 1):
                 task = create_task({
                     "student_id": student["id"],
                     "daily_log_id": log["id"],
@@ -4975,12 +4971,17 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
                     "mentor_instruction": temp.get("mentor_instruction"),
                     "ai_plan_source": "daily_task_planner",
                 })
-                created_lines.append(f"{str(task['id'])[:8]} | {task.get('subject')} | {task.get('description')}")
+                mins = item.get('estimated_minutes', 30)
+                hrs = f"{mins // 60}h {mins % 60}m" if mins >= 60 else f"{mins}m"
+                emoji = TYPE_EMOJI.get(item.get('type', ''), '📌')
+                priority = PRIORITY_LABEL.get(item.get('priority', 'medium'), '🟢')
+                plan_lines.append(f"{idx}. {emoji} {priority} *{item.get('subject')}* — {item.get('description')} _({hrs})_")
             recalc_daily_log(student["id"], today_ist_date())
             temp.setdefault("hw_received", {})[f"{slot_info['date']}:{slot_info['slot_index']}"] = True
             temp.pop("awaiting_hw_slot", None)
             save_mentorship_temp(uid, temp)
-            await update.message.reply_text("Today's tasks created:\n" + "\n".join(created_lines) + "\nUse done <id> or skip <id>.", reply_markup=ReplyKeyboardMarkup([["Show Backlog", "Medical Leave"], ["Ask Doubt"]], resize_keyboard=True))
+            plan_text = "✅ *Aaj ka Plan Ready Hai!*\n━━━━━━━━━━━━━━━━━━\n\n" + "\n".join(plan_lines) + "\n\nAll the best for today! 💪"
+            await update.message.reply_text(plan_text, parse_mode="Markdown", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True))
             return True
 
     if temp.get("awaiting_test_week") and student:
