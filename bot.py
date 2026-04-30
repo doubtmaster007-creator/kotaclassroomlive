@@ -6287,11 +6287,8 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(schedule_msg, parse_mode="Markdown", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_CLEAN_MENU, resize_keyboard=True))
         return
     elif text == "Backlogs":
-        upd_user(uid, {"step": "backlog_selection"})
-        await update.message.reply_text(
-            "Backlog ka kya karna hai? Select one tab for next process:",
-            reply_markup=ReplyKeyboardMarkup(BACKLOGS_MENU, resize_keyboard=True)
-        )
+        upd_user(uid, {"step": "mentor_backlog_ready"})
+        await update.message.reply_text("📚 *Backlogs Coverage*\n\nReady to add backlog?", reply_markup=ReplyKeyboardMarkup([["Yes", "No"], ["Back"]], resize_keyboard=True), parse_mode="Markdown")
         return
     elif text == "Check Backlogs":
         # Logic from Current Backlogs
