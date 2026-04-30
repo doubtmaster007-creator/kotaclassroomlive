@@ -2102,6 +2102,42 @@ def today_ist_date():
 def iso_date(dt) -> str:
     return dt.isoformat() if hasattr(dt, "isoformat") else str(dt)
 
+def start_delayed_wait_message(message_obj, text: str = "Please wait, under process...", delay_seconds: float = 2.0):
+    async def _sender():
+        frames = [
+            f"{text} 🕺",
+            f"{text} 💃",
+            f"{text} 🕺💃",
+        ]
+        sent_message = None
+        frame_index = 0
+        await asyncio.sleep(delay_seconds)
+        while True:
+            try:
+                if sent_message is None:
+                    sent_message = await message_obj.reply_text(frames[frame_index])
+                else:
+                    await sent_message.edit_text(frames[frame_index])
+                frame_index = (frame_index + 1) % len(frames)
+                await asyncio.sleep(1)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                await asyncio.sleep(1)
+    return asyncio.create_task(_sender())
+
+async def stop_delayed_wait_message(task: Optional[asyncio.Task]):
+    if not task:
+        return
+    if not task.done():
+        task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        pass
+
 def is_faculty_user(user_id: int) -> bool:
     c = db(); cur = db_cursor(c)
     cur.execute("SELECT id FROM faculty WHERE telegram_id=%s", (str(user_id),))
@@ -4516,6 +4552,7 @@ async def ask_next_sequential_hw(update, context, student, subjects, index):
     )
 
 async def generate_ai_task_planner(update, context, student):
+    wait_task = start_delayed_wait_message(update.message, "Please wait, under process...")
     try:
         await update.message.reply_text("⏳ AI is analyzing your timetable & backlogs... Generating Daily Planner...")
     except:
@@ -4556,6 +4593,7 @@ async def generate_ai_task_planner(update, context, student):
         logger.error(f"AI Planner generation failed: {e}")
         await update.message.reply_text("AI Task Planner generation failed. Using fallback plan.")
         planner = {"tasks": [{"type": "HW", "subject": "General", "topic": "Homework", "description": "Complete all submitted homework", "priority": "critical", "estimated_minutes": 180, "source": "CLASS", "scheduled_slot_label": "Self Study Slot"}]}
+    await stop_delayed_wait_message(wait_task)
 
     delete_pending_tasks_for_day(student["id"], today_ist_date())
     log = get_or_create_daily_log(student["id"], today_ist_date())
@@ -4597,12 +4635,14 @@ async def generate_ai_task_planner(update, context, student):
     )
 
 async def generate_backlog_ai_plan(update, student: Dict[str, Any], backlog: Dict[str, Any]) -> Dict[str, Any]:
+    wait_task = start_delayed_wait_message(update.message, "Please wait, under process...")
     payload = build_backlog_plan_payload(student, backlog)
     try:
         planner = call_json_prompt(BACKLOG_TASK_PLANNER_PROMPT, payload)
     except Exception as e:
         logger.error(f"Backlog AI planner generation failed: {e}")
         planner = fallback_backlog_plan(backlog)
+    await stop_delayed_wait_message(wait_task)
     cleaned_tasks = []
     for idx, item in enumerate(planner.get("tasks", []), start=1):
         estimated_minutes = max(30, int(item.get("estimated_minutes", 60) or 60))
@@ -4852,6 +4892,22 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         elif text == "Back One Step":
             upd_user(uid, {"step": "mentor_backlog_start"})
             await update.message.reply_text("Backlog aaj se start karna hai ya next day se?", reply_markup=ReplyKeyboardMarkup(BACKLOG_START_OPTIONS, resize_keyboard=True))
+        elif text == "Back":
+            upd_user(uid, {"step": "mentor_backlog_start"})
+            await update.message.reply_text("Backlog aaj se start karna hai ya next day se?", reply_markup=ReplyKeyboardMarkup(BACKLOG_START_OPTIONS, resize_keyboard=True))
+        elif re.fullmatch(r"\d+", text):
+            temp.setdefault("backlog_data", {})["completion_days"] = int(text)
+            save_mentorship_temp(uid, temp)
+            upd_user(uid, {"step": "mentor_backlog_time"})
+            await update.message.reply_text(
+                "Is backlog ko din me kis time prefer karoge?\nExample: 9 PM or 5 AM\nAgar sure nahi ho to Skip.",
+                reply_markup=ReplyKeyboardMarkup(BACKLOG_TIME_OPTIONS, resize_keyboard=True)
+            )
+        else:
+            await update.message.reply_text(
+                "Choose one option below.",
+                reply_markup=ReplyKeyboardMarkup(TAB1_BACKLOG_OPTS_KB, resize_keyboard=True)
+            )
         return True
 
     # TAB 2: DAILY PLANNER FLOW
