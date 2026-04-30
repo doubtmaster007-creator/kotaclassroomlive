@@ -4234,9 +4234,19 @@ async def mentorreply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Mentor direction saved for {student.get('name')}.")
 
 async def start_sequential_hw_flow(update, context, student):
-    # Get subjects from today's timetable directly (not from CLASS tasks)
-    today_day = weekday_name(today_ist())
-    timetable = get_weekday_timetable(student["id"], today_day)
+    uid = int(student["telegram_id"])
+    temp = get_mentorship_temp(get_user(uid))
+    
+    target_date_str = temp.get("planner_data", {}).get("date")
+    if target_date_str:
+        try:
+            target_day = datetime.strptime(target_date_str, "%d/%m/%Y").strftime("%A")
+        except:
+            target_day = weekday_name(today_ist())
+    else:
+        target_day = weekday_name(today_ist())
+
+    timetable = get_weekday_timetable(student["id"], target_day)
     
     subjects = []
     if timetable and timetable.get("slots"):
@@ -4248,14 +4258,11 @@ async def start_sequential_hw_flow(update, context, student):
     
     if not subjects:
         await update.message.reply_text(
-            "❌ Aaj ke liye koi classes nahi hain timetable mein.\nPehle timetable save karo.",
+            "❌ Iss din ke liye koi classes nahi hain timetable mein.\nPehle timetable save karo.",
             reply_markup=ReplyKeyboardMarkup(MENTORSHIP_CLEAN_MENU, resize_keyboard=True)
         )
         return
-
-    uid = int(student["telegram_id"])
-    temp = get_mentorship_temp(get_user(uid))
-    
+        
     temp["sequential_hw_subjects"] = subjects
     temp["sequential_hw_index"] = 0
     temp["sequential_hw_data"] = {}
@@ -4527,7 +4534,7 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
 
     if step == "mentor_planner_menu":
         if text == "Generate My Daily Plan":
-            await generate_ai_task_planner(update, context, student)
+            await start_sequential_hw_flow(update, context, student)
         elif text == "Show My Self-Study Planner":
             await update.message.reply_text("Listing all previous plans... (Feature Integration Pending)")
         elif text == "Switch to Backlogs":
