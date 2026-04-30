@@ -2284,6 +2284,7 @@ def get_weekly_timetable(student_id: str) -> List[Dict[str, Any]]:
     for row in rows:
         row["coaching_slots"] = row["coaching_slots"] if isinstance(row["coaching_slots"], list) else safe_json_loads(row.get("coaching_slots") or "[]", [])
         row["free_slots"] = row["free_slots"] if isinstance(row["free_slots"], list) else safe_json_loads(row.get("free_slots") or "[]", [])
+        row["slots"] = row["coaching_slots"] # Alias
     return rows
 
 def get_weekday_timetable(student_id: str, day_name: str) -> Optional[Dict[str, Any]]:
@@ -2296,6 +2297,7 @@ def get_weekday_timetable(student_id: str, day_name: str) -> Optional[Dict[str, 
     data = dict(row)
     data["coaching_slots"] = data["coaching_slots"] if isinstance(data["coaching_slots"], list) else safe_json_loads(data.get("coaching_slots") or "[]", [])
     data["free_slots"] = data["free_slots"] if isinstance(data["free_slots"], list) else safe_json_loads(data.get("free_slots") or "[]", [])
+    data["slots"] = data["coaching_slots"] # Alias
     return data
 
 def get_or_create_daily_log(student_id: str, date_value) -> Dict[str, Any]:
