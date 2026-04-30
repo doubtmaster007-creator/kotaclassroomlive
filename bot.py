@@ -2528,7 +2528,7 @@ def check_overlap(slots: List[Dict[str, Any]]) -> bool:
     
     parsed_times.sort(key=lambda x: x[0])
     for i in range(len(parsed_times) - 1):
-        if parsed_times[i][1] > parsed_times[i+1][0]:
+        if parsed_times[i][0] == parsed_times[i+1][0]:
             return True
     return False
 
