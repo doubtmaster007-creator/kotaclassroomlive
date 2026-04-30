@@ -1788,6 +1788,13 @@ def init_db():
             )
         """)
         
+        # Migration for tasks
+        for col, col_type in [("daily_log_id", "INT"), ("source", "VARCHAR(50)"), ("mentor_instruction", "TEXT")]:
+            try:
+                c.execute(f"ALTER TABLE tasks ADD COLUMN IF NOT EXISTS {col} {col_type}")
+            except:
+                pass
+
         c.execute("""
             CREATE TABLE IF NOT EXISTS daily_logs (
                 id SERIAL PRIMARY KEY,
@@ -4289,6 +4296,11 @@ async def ask_next_sequential_hw(update, context, student, subjects, index):
     )
 
 async def generate_ai_task_planner(update, context, student):
+    try:
+        await update.message.reply_text("⏳ AI is analyzing your timetable & backlogs... Generating Daily Planner...")
+    except:
+        pass
+
     uid = int(student["telegram_id"])
     temp = get_mentorship_temp(get_user(student["telegram_id"]))
     hw_data = temp.get("sequential_hw_data", {})
