@@ -2513,6 +2513,25 @@ def parse_slot_text(text: str) -> List[Dict[str, Any]]:
     logger.info(f"parse_slot_text: Successfully parsed {len(slots)} slots from input")
     return slots
 
+def check_overlap(slots: List[Dict[str, Any]]) -> bool:
+    if len(slots) < 2:
+        return False
+    parsed_times = []
+    for s in slots:
+        h, m = map(int, s['start'].split(':'))
+        eh, em = map(int, s['end'].split(':'))
+        start_min = h * 60 + m
+        end_min = eh * 60 + em
+        if end_min <= start_min:
+            end_min += 24 * 60
+        parsed_times.append((start_min, end_min))
+    
+    parsed_times.sort(key=lambda x: x[0])
+    for i in range(len(parsed_times) - 1):
+        if parsed_times[i][1] > parsed_times[i+1][0]:
+            return True
+    return False
+
 def compute_free_slots(slots: List[Dict[str, Any]], preferred_study_time: Optional[str], self_study_hours: Optional[int], day_name: str) -> List[Dict[str, Any]]:
     free_slots: List[Dict[str, Any]] = []
     hours_target = 8 if day_name.lower() == "saturday" else int(self_study_hours or 0)
@@ -4438,8 +4457,8 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
             save_mentorship_temp(uid, temp)
             upd_user(uid, {"step": "mentor_planner_timetable"})
             await update.message.reply_text(
-                "Enter timetable (Subject - Time in hr:min)\n\n"
-                "Example:\nBiology - 01:30\nChemistry - 02:00\nPhysics - 01:30",
+                "Enter class start time with AM/PM (Subject - Time)\n\n"
+                "Example:\nBiology - 09:00 AM\nChemistry - 11:30 AM\nPhysics - 02:00 PM",
                 reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True)
             )
         except:
@@ -4457,8 +4476,15 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         if not slots:
             await update.message.reply_text(
                 "❌ Format samajh nahi aaya.\n\n"
-                "Example:\nBiology - 09:00\nChemistry - 11:00\n\n"
+                "Example:\nBiology - 09:00 AM\nChemistry - 11:30 AM\nPhysics - 02:00 PM\n\n"
                 "Please check the format and try again."
+            )
+            return True
+            
+        if check_overlap(slots):
+            await update.message.reply_text(
+                "❌ Ek hi time pe 2 classes nahi ho sakti (Overlap detected).\n\n"
+                "Please check your AM/PM timings. Agar koi AM/PM miss kiya hai toh add kijiye aur dobara bhejiye."
             )
             return True
 
@@ -4875,6 +4901,13 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
                         "❌ Format samajh nahi aaya.\n\n"
                         "Example: Physics 9 am, Chemistry 11 am, Mathematics 2 pm\n\n"
                         "Agar class nahi hai toh 'Off' likho."
+                    )
+                    return True
+                    
+                if check_overlap(slots):
+                    await update.message.reply_text(
+                        "❌ Ek hi time pe 2 classes nahi ho sakti (Overlap detected).\n\n"
+                        "Please check your AM/PM timings. Agar koi AM/PM miss kiya hai toh add kijiye aur dobara bhejiye."
                     )
                     return True
             
