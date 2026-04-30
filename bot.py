@@ -5236,6 +5236,10 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
             upd_user(uid, {"step": "mentor_ready"})
             await update.message.reply_text("Theek hai! Aapka planner ready hai. Best of luck! 👍", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True))
             return True
+        elif text == "Back":
+            upd_user(uid, {"step": "mentor_planner_menu"})
+            await update.message.reply_text("Back to Planner Menu. Kya karna chahte hain?", reply_markup=ReplyKeyboardMarkup(TAB2_PLANNER_OPTS_KB, resize_keyboard=True))
+            return True
         else:
             await update.message.reply_text("Please choose Yes or No.", reply_markup=ReplyKeyboardMarkup([["Yes", "No"], ["Back", "Ask Doubt"]], resize_keyboard=True))
             return True
