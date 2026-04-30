@@ -3549,8 +3549,10 @@ async def run_mentorship_cycle(bot):
 
     # 3. Existing Mentorship Logic (Reminders, Reports, etc.)
     for student in active_students():
-        # (Assuming the original logic for generating tasks/reports is here)
-        pass
+        try:
+            await process_backlog_delivery(bot, student)
+        except Exception as e:
+            logger.error(f"Backlog delivery error for student {student.get('id')}: {e}")
 
 async def mentorship_scheduler_loop(bot):
     while True:
@@ -3814,6 +3816,7 @@ async def send_backlog_day_plan(bot, student: Dict[str, Any], backlog: Dict[str,
 
     update_backlog(backlog["id"], {
         "status": "in_progress",
+        "current_day": day_number + 1,
         "last_sent_day": day_number,
         "last_sent_date": today_ist_date(),
     })
@@ -3832,6 +3835,11 @@ async def process_backlog_delivery(bot, student: Dict[str, Any]):
     backlogs = get_backlogs(student["id"], ["pending", "in_progress"])
     for backlog in backlogs:
         start_date = backlog.get("start_date")
+        if isinstance(start_date, str):
+            try:
+                start_date = datetime.fromisoformat(start_date).date()
+            except Exception:
+                continue
         preferred_time = backlog.get("preferred_time")
         send_time = parse_time_hhmm(preferred_time) if preferred_time else None
         if not start_date or not send_time:
@@ -4619,6 +4627,34 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
     
     logger.info(f"DEBUG: mentorship_handler called for {uid}. Step: {step}, Text: '{text}'")
 
+    progress_check = temp.get("backlog_progress_check")
+    if progress_check:
+        if text not in {"Complete", "Incomplete"}:
+            await update.message.reply_text("Choose Complete or Incomplete.", reply_markup=ReplyKeyboardMarkup(BACKLOG_PROGRESS_OPTIONS, resize_keyboard=True))
+            return True
+        backlog = get_backlog(progress_check.get("backlog_id"))
+        if not backlog or not student:
+            temp.pop("backlog_progress_check", None)
+            save_mentorship_temp(uid, temp)
+            await update.message.reply_text("Backlog progress state expired.")
+            return True
+        next_day = int(progress_check.get("next_day", 1))
+        completion_days = int(backlog.get("completion_days") or 0)
+        temp.pop("backlog_progress_check", None)
+        save_mentorship_temp(uid, temp)
+        if text == "Complete":
+            if next_day > completion_days:
+                update_backlog(backlog["id"], {"status": "completed"})
+                await update.message.reply_text("Backlog complete. Great job!", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True))
+            else:
+                await send_backlog_day_plan(context.bot, student, backlog, next_day, include_previous_day=False)
+            return True
+        if next_day > completion_days:
+            await send_backlog_day_plan(context.bot, student, backlog, completion_days, include_previous_day=False)
+        else:
+            await send_backlog_day_plan(context.bot, student, backlog, next_day, include_previous_day=True)
+        return True
+
     # Global cancellation for registration flow
     if low_text in {"cancel", "cancel registration", "/uturn", "exit"}:
         upd_user(uid, {"step": "ready_for_new_doubt"})
@@ -4693,6 +4729,14 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         except:
             await update.message.reply_text("Please enter a valid number (e.g., 10).", reply_markup=ReplyKeyboardMarkup([["7", "10", "15", "30"], ["Back"]], resize_keyboard=True))
             return True
+        temp.setdefault("backlog_data", {})["completion_days"] = days
+        save_mentorship_temp(uid, temp)
+        upd_user(uid, {"step": "mentor_backlog_time"})
+        await update.message.reply_text(
+            "Is backlog ko din me kis time prefer karoge?\nExample: 9 PM or 5 AM\nAgar sure nahi ho to Skip.",
+            reply_markup=ReplyKeyboardMarkup(BACKLOG_TIME_OPTIONS, resize_keyboard=True)
+        )
+        return True
         
         backlog_info = temp.get("backlog_data", {})
         raw_share = backlog_info.get("share", "")
@@ -4726,6 +4770,78 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
             )
         return True
 
+    if step == "mentor_backlog_time":
+        if text == "Back":
+            upd_user(uid, {"step": "mentor_backlog_completion"})
+            await update.message.reply_text("Kitne dino mein complete karna chahte ho?\nExample: 10", reply_markup=ReplyKeyboardMarkup([["7", "10", "15", "30"], ["Back"]], resize_keyboard=True))
+            return True
+        if text != "Skip" and not parse_time_hhmm(text):
+            await update.message.reply_text(
+                "Simple time bhejo. Example: 9 PM or 5 AM. Agar sure nahi ho to Skip.",
+                reply_markup=ReplyKeyboardMarkup(BACKLOG_TIME_OPTIONS, resize_keyboard=True)
+            )
+            return True
+        temp.setdefault("backlog_data", {})["preferred_time"] = text
+        save_mentorship_temp(uid, temp)
+        upd_user(uid, {"step": "mentor_backlog_start"})
+        await update.message.reply_text(
+            "Backlog aaj se start karna hai ya next day se?",
+            reply_markup=ReplyKeyboardMarkup(BACKLOG_START_OPTIONS, resize_keyboard=True)
+        )
+        return True
+
+    if step == "mentor_backlog_start":
+        if text == "Back":
+            upd_user(uid, {"step": "mentor_backlog_time"})
+            await update.message.reply_text(
+                "Is backlog ko din me kis time prefer karoge?\nExample: 9 PM or 5 AM\nAgar sure nahi ho to Skip.",
+                reply_markup=ReplyKeyboardMarkup(BACKLOG_TIME_OPTIONS, resize_keyboard=True)
+            )
+            return True
+        if text not in {"Start Today", "Start Next Day"}:
+            await update.message.reply_text("Choose Start Today or Start Next Day.", reply_markup=ReplyKeyboardMarkup(BACKLOG_START_OPTIONS, resize_keyboard=True))
+            return True
+
+        backlog_info = temp.get("backlog_data", {})
+        raw_share = backlog_info.get("share", "")
+        if "-" in raw_share:
+            subject, topic = [x.strip() for x in raw_share.split("-", 1)]
+        else:
+            subject, topic = raw_share, raw_share
+
+        chosen_time = backlog_info.get("preferred_time", "Skip")
+        resolved_time = format_time_label(chosen_time) if chosen_time != "Skip" else today_ist().strftime("%I:%M %p").lstrip("0")
+        start_date = today_ist_date() if text == "Start Today" else today_ist_date() + timedelta(days=1)
+
+        backlog = create_backlog({
+            "student_id": student["id"],
+            "subject": subject,
+            "topic": topic,
+            "hours_per_day": backlog_info.get("hours", "2"),
+            "target_level": backlog_info.get("target_level", "JEE Mains"),
+            "completion_days": int(backlog_info.get("completion_days", 7)),
+            "dedicated_time": resolved_time,
+            "preferred_time": resolved_time,
+            "start_date": start_date,
+            "current_day": 1,
+            "last_sent_day": 0,
+            "status": "pending",
+        })
+        planner = await generate_backlog_ai_plan(update, student, backlog)
+        update_backlog(backlog["id"], {"plan_json": json.dumps(planner, ensure_ascii=True)})
+        temp["backlog_data"] = {}
+        save_mentorship_temp(uid, temp)
+        upd_user(uid, {"step": "mentor_backlog_options"})
+        await update.message.reply_text(
+            f"Backlog saved.\n\n*{subject}* - {topic}\nLevel: {backlog_info.get('target_level', 'JEE Mains')}\nDays: {backlog_info.get('completion_days', 7)}\nHours/day: {backlog_info.get('hours', '2')}\nPreferred time: {resolved_time}\nStart date: {start_date.strftime('%d/%m/%Y')}",
+            reply_markup=ReplyKeyboardMarkup(TAB1_BACKLOG_OPTS_KB, resize_keyboard=True),
+            parse_mode="Markdown"
+        )
+        if text == "Start Today":
+            latest_backlog = get_backlog(backlog["id"]) or backlog
+            await send_backlog_day_plan(context.bot, student, latest_backlog, 1, include_previous_day=False)
+        return True
+
     if step == "mentor_backlog_options":
         if text == "Add Next Backlogs":
             upd_user(uid, {"step": "mentor_backlog_ready"})
@@ -4734,8 +4850,8 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
             upd_user(uid, {"step": "mentor_planner_date"})
             await update.message.reply_text("📅 *Daily Study Planner*\n\nEnter date for class? (Format: DD/MM/YYYY)", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True), parse_mode="Markdown")
         elif text == "Back One Step":
-            upd_user(uid, {"step": "mentor_backlog_completion"})
-            await update.message.reply_text("Kitne dino mein complete karna chahte ho?", reply_markup=ReplyKeyboardMarkup([["7", "10", "15", "30"], ["Back"]], resize_keyboard=True))
+            upd_user(uid, {"step": "mentor_backlog_start"})
+            await update.message.reply_text("Backlog aaj se start karna hai ya next day se?", reply_markup=ReplyKeyboardMarkup(BACKLOG_START_OPTIONS, resize_keyboard=True))
         return True
 
     # TAB 2: DAILY PLANNER FLOW
