@@ -121,6 +121,7 @@ TAB1_BACKLOG_OPTS_KB = [
 BACKLOG_TIME_OPTIONS = [["Skip"], ["Back"]]
 BACKLOG_START_OPTIONS = [["Start Today", "Start Next Day"], ["Back"]]
 BACKLOG_PROGRESS_OPTIONS = [["Complete", "Incomplete"]]
+BACKLOG_HELP_OPTIONS = [["Need Help", "Skip"]]
 
 TAB2_PLANNER_OPTS_KB = [
     ["Generate My Daily Plan", "Show My Self-Study Planner"],
@@ -212,6 +213,26 @@ Return valid JSON only in exactly this format:
     }
   ],
   "plan_summary": "string"
+}
+"""
+
+BACKLOG_HELP_PROMPT = """
+You are a student task coach.
+
+Write a very short help tip for completing today's backlog task.
+
+Rules:
+1. Maximum 50 words.
+2. Simple Hinglish.
+3. Actionable and specific to the task.
+4. Motivate briefly.
+5. No markdown.
+6. No emojis.
+7. Return valid JSON only.
+
+Return JSON in exactly this format:
+{
+  "tip": "string"
 }
 """
 
@@ -3814,6 +3835,29 @@ def get_backlog_task_for_day(backlog: Dict[str, Any], day_number: int) -> Option
         return tasks[day_number - 1]
     return None
 
+async def generate_backlog_help_tip(update, backlog: Dict[str, Any], day_number: int, task_item: Dict[str, Any]) -> str:
+    wait_task = start_delayed_wait_message(update.message, "Please wait, under process...")
+    payload = {
+        "backlog": {
+            "subject": backlog.get("subject"),
+            "topic": backlog.get("topic"),
+            "target_level": backlog.get("target_level"),
+        },
+        "today_task": {
+            "day": day_number,
+            "description": task_item.get("description"),
+            "estimated_minutes": task_item.get("estimated_minutes"),
+        }
+    }
+    try:
+        result = call_json_prompt(BACKLOG_HELP_PROMPT, payload)
+        tip = (result.get("tip") or "").strip()
+    except Exception as e:
+        logger.error(f"Backlog help tip generation failed: {e}")
+        tip = f"Task ko 3 parts me tod do: concept, examples, revision. Pehle 25 minute focus karo, phir short break lo. Jo samajh na aaye usse mark karo aur end me quick recap karo."
+    await stop_delayed_wait_message(wait_task)
+    return " ".join(tip.split())[:320]
+
 async def send_backlog_day_plan(bot, student: Dict[str, Any], backlog: Dict[str, Any], day_number: int, include_previous_day: bool = False):
     task_today = get_backlog_task_for_day(backlog, day_number)
     if not task_today:
@@ -3863,6 +3907,19 @@ async def send_backlog_day_plan(bot, student: Dict[str, Any], backlog: Dict[str,
         chat_id=int(student["telegram_id"]),
         text=f"{prefix}\n\n" + "\n".join(lines) + f"\n\nTotal load: {total_minutes} min",
         reply_markup=ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True)
+    )
+    u = get_user(int(student["telegram_id"]))
+    if u:
+        temp = get_mentorship_temp(u)
+        temp["backlog_help_request"] = {
+            "backlog_id": backlog["id"],
+            "day_number": day_number,
+        }
+        save_mentorship_temp(int(student["telegram_id"]), temp)
+    await bot.send_message(
+        chat_id=int(student["telegram_id"]),
+        text="Need help completing this task?\n\nChoose an option below:",
+        reply_markup=ReplyKeyboardMarkup(BACKLOG_HELP_OPTIONS, resize_keyboard=True)
     )
 
 async def process_backlog_delivery(bot, student: Dict[str, Any]):
@@ -4666,6 +4723,29 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
     parent_student = get_student_by_parent_telegram(uid)
     
     logger.info(f"DEBUG: mentorship_handler called for {uid}. Step: {step}, Text: '{text}'")
+
+    help_request = temp.get("backlog_help_request")
+    if help_request:
+        if text not in {"Need Help", "Skip"}:
+            await update.message.reply_text("Choose Need Help or Skip.", reply_markup=ReplyKeyboardMarkup(BACKLOG_HELP_OPTIONS, resize_keyboard=True))
+            return True
+        temp.pop("backlog_help_request", None)
+        save_mentorship_temp(uid, temp)
+        if text == "Skip":
+            await update.message.reply_text("Theek hai, task par focus karo. Need ho to baad me pucho.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True))
+            return True
+        backlog = get_backlog(help_request.get("backlog_id"))
+        day_number = int(help_request.get("day_number", 1))
+        task_item = get_backlog_task_for_day(backlog, day_number) if backlog else None
+        if not backlog or not task_item:
+            await update.message.reply_text("Help context expire ho gaya. Next task ke saath fir se try karna.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True))
+            return True
+        tip = await generate_backlog_help_tip(update, backlog, day_number, task_item)
+        await update.message.reply_text(
+            f"AI Tip:\n{tip}",
+            reply_markup=ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True)
+        )
+        return True
 
     progress_check = temp.get("backlog_progress_check")
     if progress_check:
