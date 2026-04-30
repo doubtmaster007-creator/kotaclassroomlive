@@ -110,7 +110,7 @@ BACKLOGS_MENU = [["Check Backlogs", "Add Backlogs"], ["Back", "Ask Doubt"]]
 
 # Integrated Two-Tab Mentorship UI
 MENTORSHIP_TABS_KB = [
-    ["TAB 1: Backlogs", "TAB 2: Daily Planner"],
+    ["Backlogs", "Daily Planner"],
     ["Back", "Ask Doubt"]
 ]
 
@@ -2482,7 +2482,7 @@ def parse_slot_text(text: str) -> List[Dict[str, Any]]:
         # Regex jo "Physics 9 am" "Chemistry 10:30 am" jaise inputs samajhta hai
         m = re.search(
             r"(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)?\s*(?:time|at)?\s*"
-            r"([a-zA-Z\s]+)\s+" 
+            r"([a-zA-Z\s\.]+?)\s*(?:at|time|[:\-\s\.])+\s*" 
             r"(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)" 
             r"(?:\s*[-to]+\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm)?))?", 
             raw, flags=re.I
@@ -4047,8 +4047,8 @@ async def mentorship(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "║       MY PERSONAL MENTOR        ║\n"
                     "╚═════════════════════════════════╝\n\n"
                     "Select a Tab to manage your preparation:\n\n"
-                    "📚 *TAB 1: Backlogs Coverage*\n"
-                    "📅 *TAB 2: Daily Study Planner*",
+                    "📚 *Backlogs Coverage*\n"
+                    "📅 *Daily Study Planner*",
                     parse_mode="Markdown",
                     reply_markup=ReplyKeyboardMarkup(MENTORSHIP_TABS_KB, resize_keyboard=True)
                 )
@@ -4363,12 +4363,12 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         return True
 
     if step == "mentor_tab_selection":
-        if text == "TAB 1: Backlogs":
+        if text == "Backlogs":
             upd_user(uid, {"step": "mentor_backlog_ready"})
-            await update.message.reply_text("📚 *TAB 1: Backlogs Coverage*\n\nReady to add backlog?", reply_markup=ReplyKeyboardMarkup([["Yes", "No"], ["Back"]], resize_keyboard=True), parse_mode="Markdown")
-        elif text == "TAB 2: Daily Planner":
+            await update.message.reply_text("📚 *Backlogs Coverage*\n\nReady to add backlog?", reply_markup=ReplyKeyboardMarkup([["Yes", "No"], ["Back"]], resize_keyboard=True), parse_mode="Markdown")
+        elif text == "Daily Planner":
             upd_user(uid, {"step": "mentor_planner_date"})
-            await update.message.reply_text("📅 *TAB 2: Daily Study Planner*\n\nEnter date for class? (Format: DD/MM/YYYY)\nExample: 30/04/2026", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True), parse_mode="Markdown")
+            await update.message.reply_text("📅 *Daily Study Planner*\n\nEnter date for class? (Format: DD/MM/YYYY)\nExample: 30/04/2026", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True), parse_mode="Markdown")
         return True
 
     # TAB 1: BACKLOGS FLOW
@@ -4411,7 +4411,7 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         backlog_info = temp.get("backlog_data", {})
         add_backlog(student["id"], backlog_info["share"], backlog_info.get("hours", "2.5"), text)
         upd_user(uid, {"step": "mentor_backlog_options"})
-        await update.message.reply_text("✅ Backlogs Saved Successfully!", reply_markup=ReplyKeyboardMarkup(TAB1_BACKLOG_OPTIONS, resize_keyboard=True))
+        await update.message.reply_text("✅ Backlogs Saved Successfully!", reply_markup=ReplyKeyboardMarkup(TAB1_BACKLOG_OPTS_KB, resize_keyboard=True))
         return True
 
     if step == "mentor_backlog_options":
@@ -4451,11 +4451,40 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
             upd_user(uid, {"step": "mentor_planner_date"})
             await update.message.reply_text("Enter date for class? (Format: DD/MM/YYYY)", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True))
             return True
-        # Parse and save timetable (Simplified for now, stores as raw text in temp)
+        
+        # Parse and save timetable
+        slots = parse_slot_text(text)
+        if not slots:
+            await update.message.reply_text(
+                "❌ Format samajh nahi aaya.\n\n"
+                "Example:\nBiology - 09:00\nChemistry - 11:00\n\n"
+                "Please check the format and try again."
+            )
+            return True
+
+        target_date_str = temp.get("planner_data", {}).get("date")
+        try:
+            d = datetime.strptime(target_date_str, "%d/%m/%Y")
+            day_name = d.strftime("%A")
+        except:
+            await update.message.reply_text("❌ Date format error in memory. Please start again from date selection.")
+            upd_user(uid, {"step": "mentor_planner_date"})
+            return True
+
+        student = get_student_by_telegram(uid)
+        if not student:
+            await update.message.reply_text("❌ Student profile not found. Please /start first.")
+            return True
+
+        # Compute free slots and save to DB
+        free_slots = compute_free_slots(slots, student.get("preferred_study_time"), student.get("self_study_hours"), day_name)
+        upsert_weekly_timetable_row(student["id"], day_name, slots, free_slots, student.get("batch_name"))
+        update_student(student["id"], {"timetable_scope": "one_day"})
+
         temp.setdefault("planner_data", {})["timetable"] = text
         save_mentorship_temp(uid, temp)
         upd_user(uid, {"step": "mentor_planner_menu"})
-        await update.message.reply_text("✅ Timetable Saved Successfully!\n🔔 Notification: Will send reminder 30 mins before each class", reply_markup=ReplyKeyboardMarkup(TAB2_PLANNER_OPTIONS, resize_keyboard=True))
+        await update.message.reply_text("✅ Timetable Saved Successfully!\n🔔 Notification: Will send reminder 30 mins before each class", reply_markup=ReplyKeyboardMarkup(TAB2_PLANNER_OPTS_KB, resize_keyboard=True))
         return True
 
     if step == "mentor_planner_menu":
@@ -6918,9 +6947,15 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "profile_complete": 1,
                 "step": "ready_for_new_doubt"
             })
-            await update.message.reply_text("✅ Profile complete! Welcome to MENTORA 🚀")
+            user_name = u_check.get("name") or "Student"
+            welcome_msg = (
+                f"✅ Profile complete! Welcome to MENTORA, {user_name} 🚀\n\n"
+                f"❓ *Ask Doubt:* AI se turant solution paayein ya expert faculty se connect karein.\n"
+                f"🎓 *My Personal Mentor:* MP Sir ke guidance mein apna study schedule aur backlog manage karein."
+            )
+            await update.message.reply_text(welcome_msg, parse_mode="Markdown")
             await update.message.reply_text(
-                "Ask Doubt ya My Mentorship me se choose karein 👇",
+                "Niche diye gaye options mein se choose karein 👇",
                 reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True)
             )
         else:
@@ -6937,7 +6972,18 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Buttons me se apni class select karein 👇", reply_markup=ReplyKeyboardMarkup(CLASS_OPTIONS, resize_keyboard=True))
             return
         upd_user(uid, {"class_current": text, "profile_complete": 1, "step": "ready_for_new_doubt"})
-        await update.message.reply_text("Ask Doubt ya My Mentorship me se choose karein 👇", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
+        u2 = get_user(uid)
+        user_name = u2.get("name") or "Student"
+        welcome_msg = (
+            f"✅ Profile complete! Welcome to MENTORA, {user_name} 🚀\n\n"
+            f"❓ *Ask Doubt:* AI se turant solution paayein ya expert faculty se connect karein.\n"
+            f"🎓 *My Personal Mentor:* MP Sir ke guidance mein apna study schedule aur backlog manage karein."
+        )
+        await update.message.reply_text(welcome_msg, parse_mode="Markdown")
+        await update.message.reply_text(
+            "Niche diye gaye options mein se choose karein 👇",
+            reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True)
+        )
         return
 
     if step == "subject":
