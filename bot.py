@@ -185,6 +185,33 @@ Return JSON in exactly this format:
 }
 """
 
+BACKLOG_TASK_PLANNER_PROMPT = """
+You are an Expert Educational Planner AI specialized in converting a single academic backlog into a realistic day-wise execution plan.
+
+Your job:
+- Plan only for the provided backlog topic.
+- Respect the student's target level, completion days, and daily hours.
+- Split the work across the requested number of days.
+- Keep tasks practical and student-friendly.
+- Use simple Hinglish in task descriptions.
+- Focus on concept coverage, question practice, revision, and checkpoints.
+- Do not mention any topics that are not related to the given backlog.
+
+Return valid JSON only in exactly this format:
+{
+  "tasks": [
+    {
+      "day_offset": 0,
+      "topic": "string",
+      "description": "string",
+      "priority": "medium|high|critical",
+      "estimated_minutes": 120
+    }
+  ],
+  "plan_summary": "string"
+}
+"""
+
 DAILY_SUMMARY_PROMPT = """
 You are writing a daily academic summary for a JEE mentorship system.
 
@@ -3664,6 +3691,56 @@ def build_day_plan_payload(student: Dict[str, Any], subject: str, hw_text: str, 
         "mentor_instruction": mentor_instruction or "",
     }
 
+def parse_hours_value(value: Any, default: float = 2.0) -> float:
+    try:
+        match = re.search(r"\d+(\.\d+)?", str(value or ""))
+        if not match:
+            return default
+        parsed = float(match.group(0))
+        return parsed if parsed > 0 else default
+    except Exception:
+        return default
+
+def build_backlog_plan_payload(student: Dict[str, Any], backlog: Dict[str, Any]) -> Dict[str, Any]:
+    hours_per_day = parse_hours_value(backlog.get("hours_per_day"), 2.0)
+    completion_days = int(backlog.get("completion_days") or 7)
+    return {
+        "student": mentor_payload(student),
+        "backlog": {
+            "subject": backlog.get("subject"),
+            "topic": backlog.get("topic"),
+            "target_level": backlog.get("target_level") or "JEE Mains",
+            "completion_days": completion_days,
+            "hours_per_day": hours_per_day,
+            "total_minutes_budget": int(round(hours_per_day * 60 * completion_days)),
+        }
+    }
+
+def fallback_backlog_plan(backlog: Dict[str, Any]) -> Dict[str, Any]:
+    completion_days = max(1, int(backlog.get("completion_days") or 7))
+    daily_minutes = max(30, int(round(parse_hours_value(backlog.get("hours_per_day"), 2.0) * 60)))
+    subject = backlog.get("subject") or "General"
+    topic = backlog.get("topic") or "Backlog Topic"
+    tasks = []
+    for day_offset in range(completion_days):
+        if day_offset == 0:
+            desc = f"{topic} ka concept foundation strong karo aur short notes banao."
+        elif day_offset == completion_days - 1:
+            desc = f"{topic} ka revision + mixed practice karo aur weak points close karo."
+        else:
+            desc = f"{topic} par focused practice karo, examples solve karo aur doubts mark karo."
+        tasks.append({
+            "day_offset": day_offset,
+            "topic": topic,
+            "description": desc,
+            "priority": "high" if day_offset < completion_days - 1 else "critical",
+            "estimated_minutes": daily_minutes,
+        })
+    return {
+        "tasks": tasks,
+        "plan_summary": f"{subject} backlog ko {completion_days} din me {daily_minutes} min/day pace par cover karna hai."
+    }
+
 def calculate_completion_percentage(tasks: List[Dict[str, Any]]) -> int:
     if not tasks:
         return 0
@@ -4234,9 +4311,19 @@ async def mentorreply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Mentor direction saved for {student.get('name')}.")
 
 async def start_sequential_hw_flow(update, context, student):
-    # Get subjects from today's timetable directly (not from CLASS tasks)
-    today_day = weekday_name(today_ist())
-    timetable = get_weekday_timetable(student["id"], today_day)
+    uid = int(student["telegram_id"])
+    temp = get_mentorship_temp(get_user(uid))
+    
+    target_date_str = temp.get("planner_data", {}).get("date")
+    if target_date_str:
+        try:
+            target_day = datetime.strptime(target_date_str, "%d/%m/%Y").strftime("%A")
+        except:
+            target_day = weekday_name(today_ist())
+    else:
+        target_day = weekday_name(today_ist())
+
+    timetable = get_weekday_timetable(student["id"], target_day)
     
     subjects = []
     if timetable and timetable.get("slots"):
@@ -4248,14 +4335,11 @@ async def start_sequential_hw_flow(update, context, student):
     
     if not subjects:
         await update.message.reply_text(
-            "❌ Aaj ke liye koi classes nahi hain timetable mein.\nPehle timetable save karo.",
+            "❌ Iss din ke liye koi classes nahi hain timetable mein.\nPehle timetable save karo.",
             reply_markup=ReplyKeyboardMarkup(MENTORSHIP_CLEAN_MENU, resize_keyboard=True)
         )
         return
-
-    uid = int(student["telegram_id"])
-    temp = get_mentorship_temp(get_user(uid))
-    
+        
     temp["sequential_hw_subjects"] = subjects
     temp["sequential_hw_index"] = 0
     temp["sequential_hw_data"] = {}
@@ -4376,6 +4460,43 @@ async def generate_ai_task_planner(update, context, student):
         parse_mode="Markdown"
     )
 
+async def generate_backlog_ai_plan(update, student: Dict[str, Any], backlog: Dict[str, Any]) -> List[str]:
+    payload = build_backlog_plan_payload(student, backlog)
+    try:
+        planner = call_json_prompt(BACKLOG_TASK_PLANNER_PROMPT, payload)
+    except Exception as e:
+        logger.error(f"Backlog AI planner generation failed: {e}")
+        planner = fallback_backlog_plan(backlog)
+
+    plan_lines: List[str] = []
+    for item in planner.get("tasks", []):
+        try:
+            day_offset = max(0, int(item.get("day_offset", 0)))
+        except Exception:
+            day_offset = 0
+        scheduled_date = today_ist_date() + timedelta(days=day_offset)
+        log = get_or_create_daily_log(student["id"], scheduled_date)
+        estimated_minutes = max(30, int(item.get("estimated_minutes", 60) or 60))
+        priority = item.get("priority", "high")
+        create_task({
+            "student_id": student["id"],
+            "daily_log_id": log["id"],
+            "type": "BACKLOG",
+            "subject": backlog.get("subject") or "General",
+            "topic": item.get("topic") or backlog.get("topic") or "Backlog Topic",
+            "description": item.get("description") or f"{backlog.get('topic', 'Backlog Topic')} backlog task",
+            "status": "pending",
+            "priority": priority,
+            "source": "BACKLOG",
+            "scheduled_date": scheduled_date,
+            "estimated_minutes": estimated_minutes,
+            "mentor_instruction": planner.get("plan_summary", ""),
+        })
+        plan_lines.append(
+            f"Day {day_offset + 1} ({scheduled_date.strftime('%d/%m')}): {item.get('description')} ({estimated_minutes}m)"
+        )
+    return plan_lines
+
 async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAULT_TYPE, u: Dict[str, Any]) -> bool:
     uid = update.message.from_user.id
     text = (update.message.text or "").strip()
@@ -4429,32 +4550,81 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
             return True
         temp.setdefault("backlog_data", {})["hours"] = text
         save_mentorship_temp(uid, temp)
-        upd_user(uid, {"step": "mentor_backlog_days"})
-        await update.message.reply_text("Total days to complete?\nExample: 15 days", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True))
+        upd_user(uid, {"step": "mentor_backlog_target"})
+        await update.message.reply_text(
+            "🎯 Aapko ye topic kis level pe prepare karna hai?",
+            reply_markup=ReplyKeyboardMarkup([["Board", "JEE Mains"], ["JEE Adv", "NEET"], ["Back"]], resize_keyboard=True)
+        )
         return True
 
-    if step == "mentor_backlog_days":
+    if step == "mentor_backlog_target":
         if text == "Back":
             upd_user(uid, {"step": "mentor_backlog_hours"})
             await update.message.reply_text("Daily hours you can study for this backlog?", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True))
             return True
-        # Save to DB
+        allowed = {"Board", "JEE Mains", "JEE Adv", "NEET"}
+        if text not in allowed:
+            await update.message.reply_text("Please choose: Board, JEE Mains, JEE Adv, or NEET.", reply_markup=ReplyKeyboardMarkup([["Board", "JEE Mains"], ["JEE Adv", "NEET"], ["Back"]], resize_keyboard=True))
+            return True
+        temp.setdefault("backlog_data", {})["target_level"] = text
+        save_mentorship_temp(uid, temp)
+        upd_user(uid, {"step": "mentor_backlog_completion"})
+        await update.message.reply_text("Kitne dino mein complete karna chahte ho?\nExample: 10", reply_markup=ReplyKeyboardMarkup([["7", "10", "15", "30"], ["Back"]], resize_keyboard=True))
+        return True
+
+    if step == "mentor_backlog_completion":
+        if text == "Back":
+            upd_user(uid, {"step": "mentor_backlog_target"})
+            await update.message.reply_text("🎯 Kis level pe prepare karna hai?", reply_markup=ReplyKeyboardMarkup([["Board", "JEE Mains"], ["JEE Adv", "NEET"], ["Back"]], resize_keyboard=True))
+            return True
+        try:
+            days = int(re.sub(r"\D", "", text))
+        except:
+            await update.message.reply_text("Please enter a valid number (e.g., 10).", reply_markup=ReplyKeyboardMarkup([["7", "10", "15", "30"], ["Back"]], resize_keyboard=True))
+            return True
+        
         backlog_info = temp.get("backlog_data", {})
-        add_backlog(student["id"], backlog_info["share"], backlog_info.get("hours", "2.5"), text)
+        raw_share = backlog_info.get("share", "")
+        if "-" in raw_share:
+            subject, topic = [x.strip() for x in raw_share.split("-", 1)]
+        else:
+            subject, topic = raw_share, raw_share
+        
+        backlog = create_backlog({
+            "student_id": student["id"],
+            "subject": subject,
+            "topic": topic,
+            "hours_per_day": backlog_info.get("hours", "2"),
+            "target_level": backlog_info.get("target_level", "JEE Mains"),
+            "completion_days": days,
+            "status": "pending",
+        })
+        plan_lines = await generate_backlog_ai_plan(update, student, backlog)
+        temp["backlog_data"] = {}  # Clear temp
+        save_mentorship_temp(uid, temp)
         upd_user(uid, {"step": "mentor_backlog_options"})
-        await update.message.reply_text("✅ Backlogs Saved Successfully!", reply_markup=ReplyKeyboardMarkup(TAB1_BACKLOG_OPTS_KB, resize_keyboard=True))
+        await update.message.reply_text(
+            f"✅ Backlog Saved!\n\n📚 *{subject}* — {topic}\n🎯 Level: {backlog_info.get('target_level', 'JEE Mains')}\n🕒 {days} din mein complete karna hai\n💪 Hours/day: {backlog_info.get('hours', '2')}",
+            reply_markup=ReplyKeyboardMarkup(TAB1_BACKLOG_OPTS_KB, resize_keyboard=True),
+            parse_mode="Markdown"
+        )
+        if plan_lines:
+            await update.message.reply_text(
+                "*Backlog AI Plan Generated*\n" + "\n".join(plan_lines[:7]),
+                parse_mode="Markdown"
+            )
         return True
 
     if step == "mentor_backlog_options":
         if text == "Add Next Backlogs":
             upd_user(uid, {"step": "mentor_backlog_ready"})
-            await update.message.reply_text("Ready to add backlog?", reply_markup=ReplyKeyboardMarkup([["Yes", "No"], ["Back"]], resize_keyboard=True))
+            await update.message.reply_text("Ready to add another backlog?", reply_markup=ReplyKeyboardMarkup([["Yes", "No"], ["Back"]], resize_keyboard=True))
         elif text == "Generate AI Plan (Daily)" or text == "Switch to Daily Planner":
             upd_user(uid, {"step": "mentor_planner_date"})
             await update.message.reply_text("📅 *Daily Study Planner*\n\nEnter date for class? (Format: DD/MM/YYYY)", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True), parse_mode="Markdown")
         elif text == "Back One Step":
-            upd_user(uid, {"step": "mentor_backlog_days"})
-            await update.message.reply_text("Total days to complete?", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True))
+            upd_user(uid, {"step": "mentor_backlog_completion"})
+            await update.message.reply_text("Kitne dino mein complete karna chahte ho?", reply_markup=ReplyKeyboardMarkup([["7", "10", "15", "30"], ["Back"]], resize_keyboard=True))
         return True
 
     # TAB 2: DAILY PLANNER FLOW
@@ -4527,7 +4697,7 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
 
     if step == "mentor_planner_menu":
         if text == "Generate My Daily Plan":
-            await generate_ai_task_planner(update, context, student)
+            await start_sequential_hw_flow(update, context, student)
         elif text == "Show My Self-Study Planner":
             await update.message.reply_text("Listing all previous plans... (Feature Integration Pending)")
         elif text == "Switch to Backlogs":
@@ -5127,62 +5297,6 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         )
         return True
 
-    if step == "backlog_target_level":
-        if text.lower() == "back":
-            upd_user(uid, {"step": "entering_new_backlogs"})
-            await update.message.reply_text("📝 Naya backlog enter karo\n\nFormat: Subject - Topic", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True))
-            return True
-            
-        allowed = {"Board", "JEE Mains", "JEE Adv", "NEET"}
-        if text not in allowed:
-            await update.message.reply_text("Please choose: Board, JEE Mains, JEE Adv, or NEET.", reply_markup=ReplyKeyboardMarkup(BACKLOG_LEVEL_OPTIONS, resize_keyboard=True))
-            return True
-        
-        temp["current_backlog_target"] = text
-        save_mentorship_temp(uid, temp)
-        upd_user(uid, {"step": "backlog_days"})
-        await update.message.reply_text("Bataiye, aap ise kitne dino mein complete karna chahte hain?", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True))
-        return True
-
-    if step == "backlog_days":
-        if text.lower() == "back":
-            upd_user(uid, {"step": "backlog_target_level"})
-            await update.message.reply_text("Bataiye, aapko ye topic kis level pe prepare karna hai?", reply_markup=ReplyKeyboardMarkup(BACKLOG_LEVEL_OPTIONS, resize_keyboard=True))
-            return True
-        
-        try:
-            days = int(re.sub(r"\D", "", text))
-            temp["current_backlog_days"] = days
-            save_mentorship_temp(uid, temp)
-            upd_user(uid, {"step": "backlog_hours_per_day"})
-            await update.message.reply_text("Everyday kitne hours dedicate kar sakte ho?", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True))
-        except:
-            await update.message.reply_text("Please enter a valid number of days (e.g., 5).")
-        return True
-
-    if step == "backlog_hours_per_day":
-        if text.lower() == "back":
-            upd_user(uid, {"step": "backlog_days"})
-            await update.message.reply_text("Bataiye, aap ise kitne dino mein complete karna chahte hain?", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True))
-            return True
-            
-        backlog_id = u.get("current_backlog_id")
-        if backlog_id:
-            c = db(); cur = db_cursor(c)
-            cur.execute(
-                "UPDATE backlogs SET target_level=%s, completion_days=%s, hours_per_day=%s WHERE id=%s", 
-                (temp.get("current_backlog_target"), temp.get("current_backlog_days"), text, backlog_id)
-            )
-            c.commit(); c.close()
-            
-        upd_user(uid, {"step": "mentor_ready"})
-        await update.message.reply_text(
-            "✅ Noted! Main aapka customized daily plan banaunga aur roj uska update bhi lunga.\n\n"
-            "I'll help you complete this! 💪",
-            reply_markup=ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True)
-        )
-        return True
-
 
     if step == "mentor_overload_confirm":
         planner = temp.get("pending_overload_planner")
@@ -5235,6 +5349,10 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         elif text == "No":
             upd_user(uid, {"step": "mentor_ready"})
             await update.message.reply_text("Theek hai! Aapka planner ready hai. Best of luck! 👍", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True))
+            return True
+        elif text == "Back":
+            upd_user(uid, {"step": "mentor_planner_menu"})
+            await update.message.reply_text("Back to Planner Menu. Kya karna chahte hain?", reply_markup=ReplyKeyboardMarkup(TAB2_PLANNER_OPTS_KB, resize_keyboard=True))
             return True
         else:
             await update.message.reply_text("Please choose Yes or No.", reply_markup=ReplyKeyboardMarkup([["Yes", "No"], ["Back", "Ask Doubt"]], resize_keyboard=True))
@@ -6289,11 +6407,8 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(schedule_msg, parse_mode="Markdown", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_CLEAN_MENU, resize_keyboard=True))
         return
     elif text == "Backlogs":
-        upd_user(uid, {"step": "backlog_selection"})
-        await update.message.reply_text(
-            "Backlog ka kya karna hai? Select one tab for next process:",
-            reply_markup=ReplyKeyboardMarkup(BACKLOGS_MENU, resize_keyboard=True)
-        )
+        upd_user(uid, {"step": "mentor_backlog_ready"})
+        await update.message.reply_text("📚 *Backlogs Coverage*\n\nReady to add backlog?", reply_markup=ReplyKeyboardMarkup([["Yes", "No"], ["Back"]], resize_keyboard=True), parse_mode="Markdown")
         return
     elif text == "Check Backlogs":
         # Logic from Current Backlogs
@@ -6319,10 +6434,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Error: {e}")
             await update.message.reply_text("Error loading backlogs.", reply_markup=ReplyKeyboardMarkup(BACKLOGS_MENU, resize_keyboard=True))
         return
-    elif text == "Add Backlogs":
-        upd_user(uid, {"step":"entering_new_backlogs"})
-        await update.message.reply_text("📝 Naya backlog enter karo\n\nFormat: Subject - Topic", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True))
-        return
+
     elif text == "Others":
         upd_user(uid, {"step": "others_selection"})
         await update.message.reply_text("Other options available 👇", reply_markup=ReplyKeyboardMarkup(OTHERS_MENU, resize_keyboard=True))
@@ -6387,66 +6499,6 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Is action ke liye proper command use karo: `/{plain_lower}`", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
         return
 
-    # Issue #9: Handle entering new backlogs
-    if u.get("step") == "entering_new_backlogs" and text:
-        if text.lower() == "back":
-            upd_user(uid, {"step": "backlog_selection"})
-            await update.message.reply_text(
-                "Backlog ka kya karna hai?",
-                reply_markup=ReplyKeyboardMarkup(BACKLOGS_MENU, resize_keyboard=True)
-            )
-            return
-        
-        if len(text) > 100:
-            await update.message.reply_text(
-                "❌ Backlog entry bahut lambi hai. Max 100 characters allowed hain.",
-                reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True)
-            )
-            return
-
-        # Parse backlog entry (Subject - Topic format)
-        if "-" not in text:
-            await update.message.reply_text(
-                "❌ Invalid format. Use: Subject - Topic\nExample: Physics - Newton's Laws",
-                reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True)
-            )
-            return
-        
-        try:
-            subject, topic = [x.strip() for x in text.split("-", 1)]
-            student = get_student_by_telegram(uid)
-            if not student:
-                await update.message.reply_text("Student record not found.")
-                return
-            
-            # Create backlog entry
-            c = db(); cur = db_cursor(c)
-            cur.execute(
-                """INSERT INTO backlogs (student_id, subject, topic, status)
-                   VALUES (%s, %s, %s, %s) RETURNING *""",
-                (student["id"], subject, topic, "pending")
-            )
-            backlog = cur.fetchone() # Already a dict due to RealDictCursor
-            c.commit(); c.close()
-            
-            upd_user(uid, {"step": "backlog_target_level", "current_backlog_id": backlog["id"]})
-            
-            await update.message.reply_text(
-                f"✅ Backlog saved!\n\n"
-                f"📚 Subject: {subject}\n"
-                f"📖 Topic: {topic}\n\n"
-                f"Main aapki madad karunga ise complete karne mein! 💪\n\n"
-                f"Bataiye, aapko ye topic kis level pe prepare karna hai?",
-                reply_markup=ReplyKeyboardMarkup(BACKLOG_LEVEL_OPTIONS, resize_keyboard=True)
-            )
-            return
-        except Exception as e:
-            logger.error(f"Error saving backlog: {e}", exc_info=True)
-            await update.message.reply_text(
-                f"❌ Error saving backlog: {str(e)[:200]}\nPlease try again.",
-                reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True)
-            )
-            return
 
     low_incoming = incoming.lower()
     if low_incoming in ["uturn", "/uturn", "cancel doubt"]:
