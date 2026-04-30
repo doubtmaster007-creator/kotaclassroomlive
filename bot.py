@@ -118,6 +118,9 @@ TAB1_BACKLOG_OPTS_KB = [
     ["Add Next Backlogs", "Generate AI Plan (Daily)"],
     ["Back One Step", "Switch to Daily Planner"]
 ]
+BACKLOG_TIME_OPTIONS = [["Skip"], ["Back"]]
+BACKLOG_START_OPTIONS = [["Start Today", "Start Next Day"], ["Back"]]
+BACKLOG_PROGRESS_OPTIONS = [["Complete", "Incomplete"]]
 
 TAB2_PLANNER_OPTS_KB = [
     ["Generate My Daily Plan", "Show My Self-Study Planner"],
@@ -1843,6 +1846,13 @@ def init_db():
                 completion_days INT,
                 hours_per_day VARCHAR(50),
                 dedicated_time VARCHAR(255),
+                preferred_time VARCHAR(50),
+                start_date DATE,
+                current_day INT DEFAULT 1,
+                last_sent_day INT DEFAULT 0,
+                last_sent_date DATE,
+                last_prompt_date DATE,
+                plan_json TEXT,
                 status VARCHAR(50) DEFAULT 'pending',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -1970,6 +1980,13 @@ def init_db():
         ensure_column_pg(conn, "backlogs", "completion_days", "INT")
         ensure_column_pg(conn, "backlogs", "hours_per_day", "VARCHAR(50)")
         ensure_column_pg(conn, "backlogs", "dedicated_time", "VARCHAR(255)")
+        ensure_column_pg(conn, "backlogs", "preferred_time", "VARCHAR(50)")
+        ensure_column_pg(conn, "backlogs", "start_date", "DATE")
+        ensure_column_pg(conn, "backlogs", "current_day", "INT DEFAULT 1")
+        ensure_column_pg(conn, "backlogs", "last_sent_day", "INT DEFAULT 0")
+        ensure_column_pg(conn, "backlogs", "last_sent_date", "DATE")
+        ensure_column_pg(conn, "backlogs", "last_prompt_date", "DATE")
+        ensure_column_pg(conn, "backlogs", "plan_json", "TEXT")
         ensure_column_pg(conn, "backlogs", "status", "VARCHAR(50) DEFAULT 'pending'")
         
         ensure_column_pg(conn, "medical_leaves", "student_requested", "BOOLEAN DEFAULT false")
@@ -2365,6 +2382,13 @@ def get_backlogs(student_id: str, statuses: Optional[List[str]] = None) -> List[
     rows = [dict(r) for r in cur.fetchall()]
     c.close()
     return rows
+
+def get_backlog(backlog_id) -> Optional[Dict[str, Any]]:
+    c = db(); cur = db_cursor(c)
+    cur.execute("SELECT * FROM backlogs WHERE id=%s", (backlog_id,))
+    row = cur.fetchone()
+    c.close()
+    return dict(row) if row else None
 
 def create_report(data: Dict[str, Any]) -> Dict[str, Any]:
     cols = list(data.keys()) + ["created_at"]
@@ -3741,6 +3765,110 @@ def fallback_backlog_plan(backlog: Dict[str, Any]) -> Dict[str, Any]:
         "plan_summary": f"{subject} backlog ko {completion_days} din me {daily_minutes} min/day pace par cover karna hai."
     }
 
+def get_backlog_plan_tasks(backlog: Dict[str, Any]) -> List[Dict[str, Any]]:
+    plan = safe_json_loads(backlog.get("plan_json"), {})
+    tasks = plan.get("tasks", []) if isinstance(plan, dict) else []
+    return tasks if isinstance(tasks, list) else []
+
+def get_backlog_task_for_day(backlog: Dict[str, Any], day_number: int) -> Optional[Dict[str, Any]]:
+    tasks = get_backlog_plan_tasks(backlog)
+    if 1 <= day_number <= len(tasks):
+        return tasks[day_number - 1]
+    return None
+
+async def send_backlog_day_plan(bot, student: Dict[str, Any], backlog: Dict[str, Any], day_number: int, include_previous_day: bool = False):
+    task_today = get_backlog_task_for_day(backlog, day_number)
+    if not task_today:
+        return
+
+    tasks_for_message = []
+    total_minutes = 0
+    if include_previous_day and day_number > 1:
+        previous_task = get_backlog_task_for_day(backlog, day_number - 1)
+        if previous_task:
+            tasks_for_message.append((day_number - 1, previous_task))
+            total_minutes += int(previous_task.get("estimated_minutes", 0) or 0)
+    tasks_for_message.append((day_number, task_today))
+    total_minutes += int(task_today.get("estimated_minutes", 0) or 0)
+
+    log = get_or_create_daily_log(student["id"], today_ist_date())
+    lines = []
+    for label_day, item in tasks_for_message:
+        desc = item.get("description") or backlog.get("topic") or "Backlog task"
+        mins = max(30, int(item.get("estimated_minutes", 60) or 60))
+        lines.append(f"Day {label_day}: {desc} ({mins}m)")
+        create_task({
+            "student_id": student["id"],
+            "daily_log_id": log["id"],
+            "type": "BACKLOG",
+            "subject": backlog.get("subject") or "General",
+            "topic": item.get("topic") or backlog.get("topic") or "Backlog Topic",
+            "description": desc,
+            "status": "pending",
+            "priority": item.get("priority", "high"),
+            "source": "BACKLOG",
+            "scheduled_date": today_ist_date(),
+            "estimated_minutes": mins,
+            "mentor_instruction": f"Backlog Day {label_day}",
+        })
+
+    update_backlog(backlog["id"], {
+        "status": "in_progress",
+        "last_sent_day": day_number,
+        "last_sent_date": today_ist_date(),
+    })
+    recalc_daily_log(student["id"], today_ist_date())
+
+    prefix = "Aaj ka backlog task:" if not include_previous_day else "Previous pending + aaj ka combined backlog task:"
+    await bot.send_message(
+        chat_id=int(student["telegram_id"]),
+        text=f"{prefix}\n\n" + "\n".join(lines) + f"\n\nTotal load: {total_minutes} min",
+        reply_markup=ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True)
+    )
+
+async def process_backlog_delivery(bot, student: Dict[str, Any]):
+    now_dt = today_ist()
+    today = now_dt.date()
+    backlogs = get_backlogs(student["id"], ["pending", "in_progress"])
+    for backlog in backlogs:
+        start_date = backlog.get("start_date")
+        preferred_time = backlog.get("preferred_time")
+        send_time = parse_time_hhmm(preferred_time) if preferred_time else None
+        if not start_date or not send_time:
+            continue
+        scheduled_dt = datetime.combine(today, send_time, tzinfo=IST)
+        if today < start_date or now_dt < scheduled_dt:
+            continue
+
+        last_sent_day = int(backlog.get("last_sent_day") or 0)
+        completion_days = int(backlog.get("completion_days") or 0)
+        last_sent_date = backlog.get("last_sent_date")
+        last_prompt_date = backlog.get("last_prompt_date")
+
+        if last_sent_day == 0 and today >= start_date:
+            if last_sent_date != today:
+                await send_backlog_day_plan(bot, student, backlog, 1, include_previous_day=False)
+            continue
+
+        if last_sent_day >= completion_days:
+            continue
+
+        if last_sent_date == today or last_prompt_date == today:
+            continue
+
+        temp = get_mentorship_temp(get_user(int(student["telegram_id"])))
+        temp["backlog_progress_check"] = {
+            "backlog_id": backlog["id"],
+            "next_day": last_sent_day + 1,
+        }
+        save_mentorship_temp(int(student["telegram_id"]), temp)
+        update_backlog(backlog["id"], {"last_prompt_date": today})
+        await bot.send_message(
+            chat_id=int(student["telegram_id"]),
+            text=f"Kal ka backlog task complete hua?\n{backlog.get('subject', 'Backlog')} - Day {last_sent_day}",
+            reply_markup=ReplyKeyboardMarkup(BACKLOG_PROGRESS_OPTIONS, resize_keyboard=True)
+        )
+
 def calculate_completion_percentage(tasks: List[Dict[str, Any]]) -> int:
     if not tasks:
         return 0
@@ -4460,42 +4588,25 @@ async def generate_ai_task_planner(update, context, student):
         parse_mode="Markdown"
     )
 
-async def generate_backlog_ai_plan(update, student: Dict[str, Any], backlog: Dict[str, Any]) -> List[str]:
+async def generate_backlog_ai_plan(update, student: Dict[str, Any], backlog: Dict[str, Any]) -> Dict[str, Any]:
     payload = build_backlog_plan_payload(student, backlog)
     try:
         planner = call_json_prompt(BACKLOG_TASK_PLANNER_PROMPT, payload)
     except Exception as e:
         logger.error(f"Backlog AI planner generation failed: {e}")
         planner = fallback_backlog_plan(backlog)
-
-    plan_lines: List[str] = []
-    for item in planner.get("tasks", []):
-        try:
-            day_offset = max(0, int(item.get("day_offset", 0)))
-        except Exception:
-            day_offset = 0
-        scheduled_date = today_ist_date() + timedelta(days=day_offset)
-        log = get_or_create_daily_log(student["id"], scheduled_date)
+    cleaned_tasks = []
+    for idx, item in enumerate(planner.get("tasks", []), start=1):
         estimated_minutes = max(30, int(item.get("estimated_minutes", 60) or 60))
-        priority = item.get("priority", "high")
-        create_task({
-            "student_id": student["id"],
-            "daily_log_id": log["id"],
-            "type": "BACKLOG",
-            "subject": backlog.get("subject") or "General",
+        cleaned_tasks.append({
+            "day_offset": idx - 1,
             "topic": item.get("topic") or backlog.get("topic") or "Backlog Topic",
             "description": item.get("description") or f"{backlog.get('topic', 'Backlog Topic')} backlog task",
-            "status": "pending",
-            "priority": priority,
-            "source": "BACKLOG",
-            "scheduled_date": scheduled_date,
+            "priority": item.get("priority", "high"),
             "estimated_minutes": estimated_minutes,
-            "mentor_instruction": planner.get("plan_summary", ""),
         })
-        plan_lines.append(
-            f"Day {day_offset + 1} ({scheduled_date.strftime('%d/%m')}): {item.get('description')} ({estimated_minutes}m)"
-        )
-    return plan_lines
+    planner["tasks"] = cleaned_tasks
+    return planner
 
 async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAULT_TYPE, u: Dict[str, Any]) -> bool:
     uid = update.message.from_user.id
