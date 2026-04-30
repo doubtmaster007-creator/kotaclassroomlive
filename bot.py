@@ -1621,14 +1621,19 @@ def check_telegram_user_in_portal(telegram_id: int) -> dict:
 
 
 def is_valid_name_format(name: str) -> bool:
-    """Validate name - no abuse words, proper length"""
-    if not name or len(name) < 3:
+    """Validate name - no abuse words, proper length. 
+    Allows dots, spaces, hyphens and most characters to avoid blocking valid names.
+    """
+    if not name or len(name.strip()) < 2:
         return False
     
     if contains_abuse_words(name):
         return False
     
-    if not re.match(r"^[a-zA-Z\s'-]{3,50}$", name):
+    # Relaxed regex: allows letters, spaces, dots, hyphens and common international characters
+    # Still prevents numeric-only or mostly-special-character names
+    if not re.match(r"^[a-zA-Z.\s'-]{2,100}$", name) and not any(ord(c) > 127 for c in name):
+        # If it's not English letters/dots/spaces AND doesn't have non-ASCII (Hindi/etc), then it's invalid
         return False
     
     return True
@@ -4166,9 +4171,17 @@ async def accept_student(update: Update, context: ContextTypes.DEFAULT_TYPE):
         updates["mentor_id"] = faculty["id"]
         updates["mentor_id_telegram"] = faculty["telegram_id"]
     update_student(student["id"], updates)
-    upd_user(int(student["telegram_id"]), {"mentorship_mode": "approved", "mentorship_student_id": str(student["id"]), "step": "mentor_exam_target"})
-    await context.bot.send_message(chat_id=int(student["telegram_id"]), text="Mentorship approved. Aapka exam target choose karo:", reply_markup=ReplyKeyboardMarkup(EXAM_TARGET_OPTIONS, resize_keyboard=True))
-    await update.message.reply_text(f"{student.get('name')} approved successfully.")
+    sid = student["telegram_id"]
+    if sid:
+        sid_int = int(sid)
+        upd_user(sid_int, {"mentorship_mode": "approved", "mentorship_student_id": str(student["id"]), "step": "ready_for_new_doubt"})
+        await context.bot.send_message(
+            chat_id=sid_int, 
+            text="🎊 *CONGRATULATIONS!*\n\nAapka Mentorship application approve ho gaya hai.\n\nAb aap **'My Personal Mentor'** par click karke apna Backlog aur Daily Planner manage kar sakte hain! 🚀",
+            parse_mode="Markdown",
+            reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True)
+        )
+    await update.message.reply_text(f"Student {student['name']} approved successfully.")
 
 async def mentorreply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.message.from_user.id
@@ -4336,7 +4349,13 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
     uid = update.message.from_user.id
     text = (update.message.text or "").strip()
     low_text = text.lower()
+    step = u.get("step") or ""
+    temp = get_mentorship_temp(u)
+    student = get_student_by_telegram(uid)
+    parent_student = get_student_by_parent_telegram(uid)
     
+    logger.info(f"DEBUG: mentorship_handler called for {uid}. Step: {step}, Text: '{text}'")
+
     # Global cancellation for registration flow
     if low_text in {"cancel", "cancel registration", "/uturn", "exit"}:
         upd_user(uid, {"step": "ready_for_new_doubt"})
@@ -4663,21 +4682,35 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         update_student(u["mentorship_student_id"], {
             "parent_phone": clean_phone, 
             "parent_verified": False, 
-            "parent_verification_requested_at": now_iso()
+            "parent_verification_requested_at": now_iso(),
+            "is_approved": False
         })
         
         student = get_student(u["mentorship_student_id"])
         bot_username = (await context.bot.get_me()).username
         deep_link = f"https://t.me/{bot_username}?start=parent_{uid}"
         
-        await update.message.reply_text(
-            f"✅ Parent verification link set up!\n\n"
-            f"📱 Parent Phone: {clean_phone}\n\n"
-            f"Niche di gayi link apne parent ko bhejein aur unhe kahein ki bot start karke onboarding complete karein:\n\n"
-            f"{deep_link}\n\n"
-            "Ab aage badhte hain..."
+        # Notify Mentors
+        mentor_msg = (
+            f"🔔 *NEW MENTORSHIP APPROVAL NEEDED*\n\n"
+            f"👤 Student: {student.get('name')}\n"
+            f"🎓 Exam: {temp.get('reg_data',{}).get('exam_target')}\n"
+            f"📦 Batch: {temp.get('reg_data',{}).get('batch_name')}\n"
+            f"📱 Phone: {student.get('phone')}\n"
+            f"👪 Parent Phone: {clean_phone}\n\n"
+            f"Use `/accept_student {uid}` to approve."
         )
-        await start_immediate_timetable_capture(update, uid)
+        await context.bot.send_message(chat_id=MENTORSHIP_GROUP_ID, text=mentor_msg, parse_mode="Markdown")
+
+        upd_user(uid, {"step": "mentor_waiting_approval"})
+        await update.message.reply_text(
+            f"✅ *Registration Submitted Successfully!*\n\n"
+            f"1️⃣ *Parent Link:* Apne parent ko ye link bhejein: {deep_link}\n"
+            f"2️⃣ *Approval:* Aapki application review ke liye bhej di gayi hai.\n\n"
+            f"Mentor ke approval ke baad aapka **My Personal Mentor** dashboard active ho jayega. Jald hi milte hain! ✨",
+            parse_mode="Markdown",
+            reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True)
+        )
         return True
 
     if step == "mentor_timetable_date":
@@ -5574,7 +5607,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         })
         await update.message.reply_text(
             "Aapka poora naam kya hai? (First Name + Last Name)",
-            reply_markup=ReplyKeyboardRemove()
+            reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True)
         )
         return
 
@@ -6791,20 +6824,26 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if step == "name":
+        if text == "Back":
+            upd_user(uid, {"step": "ready_for_new_doubt"})
+            await update.message.reply_text("Wapas menu par 👇", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
+            return
+
         if not text:
-            await update.message.reply_text("Aapka poora naam kya hai? (First Name + Last Name)")
+            await update.message.reply_text("Aapka poora naam kya hai? (First Name + Last Name)", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True))
             return
         
         # Validate name format
         if not is_valid_name_format(text):
             await update.message.reply_text(
                 "❌ Name contains invalid characters or abuse words.\n"
-                "Please enter your name properly (letters, spaces, hyphens only)."
+                "Please enter your name properly (letters, spaces, dots only).",
+                reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True)
             )
             return
         
         upd_user(uid, {"name": text.strip(), "step": "phone"})
-        contact_kb = [[KeyboardButton("Share Contact", request_contact=True)]]
+        contact_kb = [[KeyboardButton("Share Contact", request_contact=True)], ["Back"]]
         await update.message.reply_text(
             "Ab apna Phone Number verify karne ke liye niche 'Share Contact' button dabayein 👇",
             reply_markup=ReplyKeyboardMarkup(contact_kb, resize_keyboard=True)
@@ -6812,6 +6851,11 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if step == "phone":
+        if text == "Back":
+            upd_user(uid, {"step": "name"})
+            await update.message.reply_text("Aapka poora naam kya hai? (First Name + Last Name)", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True))
+            return
+
         phone = None
         if update.message.contact:
             c = update.message.contact
@@ -6822,7 +6866,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text(
                 "❌ Valid number ke liye niche diya gaya 'Share Contact' button hi use karein 👇",
-                reply_markup=ReplyKeyboardMarkup([[KeyboardButton("Share Contact", request_contact=True)]], resize_keyboard=True)
+                reply_markup=ReplyKeyboardMarkup([[KeyboardButton("Share Contact", request_contact=True)], ["Back"]], resize_keyboard=True)
             )
             return
         
@@ -6830,7 +6874,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not is_valid_phone_format(phone):
             await update.message.reply_text(
                 "❌ Invalid phone number. Please use 'Share Contact' button.",
-                reply_markup=ReplyKeyboardMarkup([[KeyboardButton("Share Contact", request_contact=True)]], resize_keyboard=True)
+                reply_markup=ReplyKeyboardMarkup([[KeyboardButton("Share Contact", request_contact=True)], ["Back"]], resize_keyboard=True)
             )
             return
         
