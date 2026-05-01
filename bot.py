@@ -2126,9 +2126,9 @@ def iso_date(dt) -> str:
 def start_delayed_wait_message(message_obj, text: str = "Please wait, under process...", delay_seconds: float = 2.0):
     async def _sender():
         frames = [
-            f"{text} 🕺",
-            f"{text} 💃",
-            f"{text} 🕺💃",
+            f"{text} ⏳",
+            f"{text} 🤔",
+            f"{text} ⌛",
         ]
         sent_message = None
         frame_index = 0
@@ -2284,7 +2284,6 @@ def get_weekly_timetable(student_id: str) -> List[Dict[str, Any]]:
     for row in rows:
         row["coaching_slots"] = row["coaching_slots"] if isinstance(row["coaching_slots"], list) else safe_json_loads(row.get("coaching_slots") or "[]", [])
         row["free_slots"] = row["free_slots"] if isinstance(row["free_slots"], list) else safe_json_loads(row.get("free_slots") or "[]", [])
-        row["slots"] = row["coaching_slots"] # Alias
     return rows
 
 def get_weekday_timetable(student_id: str, day_name: str) -> Optional[Dict[str, Any]]:
@@ -2297,7 +2296,6 @@ def get_weekday_timetable(student_id: str, day_name: str) -> Optional[Dict[str, 
     data = dict(row)
     data["coaching_slots"] = data["coaching_slots"] if isinstance(data["coaching_slots"], list) else safe_json_loads(data.get("coaching_slots") or "[]", [])
     data["free_slots"] = data["free_slots"] if isinstance(data["free_slots"], list) else safe_json_loads(data.get("free_slots") or "[]", [])
-    data["slots"] = data["coaching_slots"] # Alias
     return data
 
 def get_or_create_daily_log(student_id: str, date_value) -> Dict[str, Any]:
@@ -4613,85 +4611,99 @@ async def ask_next_sequential_hw(update, context, student, subjects, index):
 async def generate_ai_task_planner(update, context, student):
     wait_task = start_delayed_wait_message(update.message, "Please wait, under process...")
     try:
-        await update.message.reply_text("⏳ AI is analyzing your timetable & backlogs... Generating Daily Planner...")
-    except:
-        pass
+        try:
+            await update.message.reply_text("⏳ AI is analyzing your timetable & backlogs... Generating Daily Planner...")
+        except:
+            pass
 
-    uid = int(student["telegram_id"])
-    temp = get_mentorship_temp(get_user(student["telegram_id"]))
-    hw_data = temp.get("sequential_hw_data", {})
-    
-    # Predefined hours from student profile
-    dedicated_hours = student.get("self_study_hours", 6)
-    
-    # Logic: AI distributes tasks across available dedicated hours
-    # We'll use the existing DAILY_TASK_PLANNER_PROMPT logic
-    
-    timetable = get_weekday_timetable(student["id"], weekday_name(today_ist()))
-    free_slots = (timetable or {}).get("free_slots") or []
-    
-    next_monday = today_ist_date() - timedelta(days=today_ist_date().weekday())
-    
-    # Combine all HW into a single text for the prompt
-    all_hw_text = "\n".join([f"{s}: {details}" for s, details in hw_data.items()])
-    
-    payload = build_day_plan_payload(
-        student, 
-        "All Subjects", 
-        all_hw_text, 
-        free_slots, 
-        get_pending_tasks_upto_days(student["id"], 3), 
-        get_test_week(student["id"], next_monday), 
-        temp.get("mentor_instruction"),
-        get_backlogs(student["id"], ["pending"])
-    )
-    
-    try:
-        planner = call_json_prompt(DAILY_TASK_PLANNER_PROMPT, payload)
+        uid = int(student["telegram_id"])
+        temp = get_mentorship_temp(get_user(student["telegram_id"]))
+        hw_data = temp.get("sequential_hw_data", {})
+
+        # Predefined hours from student profile
+        dedicated_hours = student.get("self_study_hours", 6)
+
+        # Logic: AI distributes tasks across available dedicated hours
+        # We'll use the existing DAILY_TASK_PLANNER_PROMPT logic
+
+        timetable = get_weekday_timetable(student["id"], weekday_name(today_ist()))
+        free_slots = (timetable or {}).get("free_slots") or []
+
+        next_monday = today_ist_date() - timedelta(days=today_ist_date().weekday())
+
+        # Combine all HW into a single text for the prompt
+        all_hw_text = "\n".join([f"{s}: {details}" for s, details in hw_data.items()])
+
+        payload = build_day_plan_payload(
+            student,
+            "All Subjects",
+            all_hw_text,
+            free_slots,
+            get_pending_tasks_upto_days(student["id"], 3),
+            get_test_week(student["id"], next_monday),
+            temp.get("mentor_instruction"),
+            get_backlogs(student["id"], ["pending"])
+        )
+
+        try:
+            planner = await asyncio.wait_for(
+                asyncio.to_thread(call_json_prompt, DAILY_TASK_PLANNER_PROMPT, payload),
+                timeout=45
+            )
+        except asyncio.TimeoutError:
+            logger.error("AI Planner generation timed out after 45 seconds")
+            await update.message.reply_text("AI planner mein delay aa gaya. Fallback plan apply kar raha hoon.")
+            planner = {"tasks": [{"type": "HW", "subject": "General", "topic": "Homework", "description": "Complete all submitted homework", "priority": "critical", "estimated_minutes": 180, "source": "CLASS", "scheduled_slot_label": "Self Study Slot"}]}
+        except Exception as e:
+            logger.error(f"AI Planner generation failed: {e}")
+            await update.message.reply_text("AI Task Planner generation failed. Using fallback plan.")
+            planner = {"tasks": [{"type": "HW", "subject": "General", "topic": "Homework", "description": "Complete all submitted homework", "priority": "critical", "estimated_minutes": 180, "source": "CLASS", "scheduled_slot_label": "Self Study Slot"}]}
+
+        delete_pending_tasks_for_day(student["id"], today_ist_date())
+        log = get_or_create_daily_log(student["id"], today_ist_date())
+        created_lines = []
+        emoji_map = {"HW": "📝", "REVISION": "📖", "BACKLOG": "🔁", "PENDING": "⏳", "TEST_WEEK": "📝"}
+        priority_emoji = {"critical": "🔴", "high": "🟡", "medium": "🟢"}
+
+        for item in planner.get("tasks", []):
+            task = create_task({
+                "student_id": student["id"],
+                "daily_log_id": log["id"],
+                "type": item.get("type"),
+                "subject": item.get("subject"),
+                "topic": item.get("topic"),
+                "description": item.get("description"),
+                "status": "pending",
+                "priority": item.get("priority", "medium"),
+                "source": item.get("source", "CLASS"),
+                "scheduled_date": today_ist_date(),
+                "estimated_minutes": item.get("estimated_minutes", 30),
+                "mentor_instruction": temp.get("mentor_instruction"),
+                "ai_plan_source": "daily_task_planner",
+            })
+
+            e = emoji_map.get(item.get("type"), "📝")
+            p = priority_emoji.get(item.get("priority"), "🟢")
+            created_lines.append(f"{e} {p} *{item.get('subject')}* — {item.get('description')} _({item.get('estimated_minutes')}m)_")
+
+        recalc_daily_log(student["id"], today_ist_date())
+
+        # Priority 4.2: Extra Task Addition (Optional)
+        upd_user(uid, {"step": "mentor_extra_task_ask"})
+        await update.message.reply_text(
+            f"Aapka aaj ka Plan taiyaar hai! 📋\n\n" +
+            "\n".join(created_lines) +
+            f"\n\nKya aap is planner mein kuch aur add karna chahte hain?",
+            reply_markup=ReplyKeyboardMarkup([["Yes", "No"], ["Back", "Ask Doubt"]], resize_keyboard=True),
+            parse_mode="Markdown"
+        )
     except Exception as e:
-        logger.error(f"AI Planner generation failed: {e}")
-        await update.message.reply_text("AI Task Planner generation failed. Using fallback plan.")
-        planner = {"tasks": [{"type": "HW", "subject": "General", "topic": "Homework", "description": "Complete all submitted homework", "priority": "critical", "estimated_minutes": 180, "source": "CLASS", "scheduled_slot_label": "Self Study Slot"}]}
-    await stop_delayed_wait_message(wait_task)
-
-    delete_pending_tasks_for_day(student["id"], today_ist_date())
-    log = get_or_create_daily_log(student["id"], today_ist_date())
-    created_lines = []
-    emoji_map = {"HW": "📝", "REVISION": "📖", "BACKLOG": "🔁", "PENDING": "⏳", "TEST_WEEK": "📝"}
-    priority_emoji = {"critical": "🔴", "high": "🟡", "medium": "🟢"}
-    
-    for item in planner.get("tasks", []):
-        task = create_task({
-            "student_id": student["id"],
-            "daily_log_id": log["id"],
-            "type": item.get("type"),
-            "subject": item.get("subject"),
-            "topic": item.get("topic"),
-            "description": item.get("description"),
-            "status": "pending",
-            "priority": item.get("priority", "medium"),
-            "source": item.get("source", "CLASS"),
-            "scheduled_date": today_ist_date(),
-            "estimated_minutes": item.get("estimated_minutes", 30),
-            "mentor_instruction": temp.get("mentor_instruction"),
-            "ai_plan_source": "daily_task_planner",
-        })
-        
-        e = emoji_map.get(item.get("type"), "📝")
-        p = priority_emoji.get(item.get("priority"), "🟢")
-        created_lines.append(f"{e} {p} *{item.get('subject')}* — {item.get('description')} _({item.get('estimated_minutes')}m)_")
-    
-    recalc_daily_log(student["id"], today_ist_date())
-    
-    # Priority 4.2: Extra Task Addition (Optional)
-    upd_user(uid, {"step": "mentor_extra_task_ask"})
-    await update.message.reply_text(
-        f"Aapka aaj ka Plan taiyaar hai! 📋\n\n" + 
-        "\n".join(created_lines) + 
-        f"\n\nKya aap is planner mein kuch aur add karna chahte hain?",
-        reply_markup=ReplyKeyboardMarkup([["Yes", "No"], ["Back", "Ask Doubt"]], resize_keyboard=True),
-        parse_mode="Markdown"
-    )
+        logger.exception(f"Unhandled error in generate_ai_task_planner: {e}")
+        await update.message.reply_text(
+            "⚠️ Planner generate karte waqt unexpected issue aaya. Please dubara try karo."
+        )
+    finally:
+        await stop_delayed_wait_message(wait_task)
 
 async def generate_backlog_ai_plan(update, student: Dict[str, Any], backlog: Dict[str, Any]) -> Dict[str, Any]:
     wait_task = start_delayed_wait_message(update.message, "Please wait, under process...")
