@@ -94,10 +94,8 @@ MENTORSHIP_CHECK_SECONDS = 60
 PLANNER_MODEL = os.getenv("MENTORSHIP_MODEL", MODEL_HAIKU)
 
 MENTORSHIP_CLEAN_MENU = [
-    ["Show Mentorship Progress"],
-    ["Start Mentorship Flow", "Back"],
-    ["Active Mentorship Schedule for Day"],
-    ["Ask Doubt"]
+    ["Backlogs", "Generate My Daily Plan"],
+    ["Back", "Ask Doubt"]
 ]
 TIMETABLE_CHANGE_OPTIONS = [["Change Timetable"], ["Back", "Ask Doubt"]]
 
@@ -110,7 +108,7 @@ BACKLOGS_MENU = [["Check Backlogs", "Add Backlogs"], ["Back", "Ask Doubt"]]
 
 # Integrated Two-Tab Mentorship UI
 MENTORSHIP_TABS_KB = [
-    ["Backlogs", "Daily Planner"],
+    ["Backlogs", "Generate My Daily Plan"],
     ["Back", "Ask Doubt"]
 ]
 
@@ -2685,6 +2683,12 @@ def mentor_payload(student: Dict[str, Any]) -> Dict[str, Any]:
         "self_study_hours": student.get("self_study_hours"),
     }
 
+def default_hw_subjects_for_student(student: Dict[str, Any]) -> List[str]:
+    goal_text = f"{student.get('goal') or ''} {student.get('exam_target') or ''}".lower()
+    if "neet" in goal_text or "biology" in goal_text or "bio" in goal_text:
+        return ["Physics", "Chemistry", "Biology"]
+    return ["Physics", "Chemistry", "Mathematics"]
+
 def ins_doubt(data: Dict[str, Any]):
     c = db(); cur = db_cursor(c); ts = now_iso()
     cur.execute("""INSERT INTO doubts(
@@ -4563,11 +4567,7 @@ async def start_sequential_hw_flow(update, context, student):
                 subjects.append(subj)
     
     if not subjects:
-        await update.message.reply_text(
-            "❌ Iss din ke liye koi classes nahi hain timetable mein.\nPehle timetable save karo.",
-            reply_markup=ReplyKeyboardMarkup(MENTORSHIP_CLEAN_MENU, resize_keyboard=True)
-        )
-        return
+        subjects = default_hw_subjects_for_student(student)
         
     temp["sequential_hw_subjects"] = subjects
     temp["sequential_hw_index"] = 0
@@ -4799,7 +4799,7 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         if text == "Backlogs":
             upd_user(uid, {"step": "mentor_backlog_ready"})
             await update.message.reply_text("📚 *Backlogs Coverage*\n\nReady to add backlog?", reply_markup=ReplyKeyboardMarkup([["Yes", "No"], ["Back"]], resize_keyboard=True), parse_mode="Markdown")
-        elif text == "Daily Planner":
+        elif text in {"Daily Planner", "Generate My Daily Plan"}:
             upd_user(uid, {"step": "mentor_planner_date"})
             await update.message.reply_text("📅 *Daily Study Planner*\n\nEnter date for class? (Format: DD/MM/YYYY)\nExample: 30/04/2026", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True), parse_mode="Markdown")
         return True
@@ -5347,9 +5347,8 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
                 )
                 upd_user(uid, {"step": "mentor_ready"})
                 await update.message.reply_text(
-                    "📝 Ab homework details bhejne ke liye 'HW Input' dabao.\n"
-                    "Ya 'Back' se dashboard par wapas jao.",
-                    reply_markup=ReplyKeyboardMarkup([["HW Input"], ["Back"]], resize_keyboard=True)
+                    "Daily plan banane ke liye 'Generate My Daily Plan' dabao.",
+                    reply_markup=ReplyKeyboardMarkup(MENTORSHIP_TABS_KB, resize_keyboard=True)
                 )
                 return True
             
@@ -5535,12 +5534,11 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
             )
             return True
 
-        # After saving timetable, offer HW Input as next step
+        # After saving timetable, route back to the two-tab planner flow.
         upd_user(uid, {"step": "mentor_ready"})
         await update.message.reply_text(
-            "📝 Ab homework details bhejne ke liye 'HW Input' dabao.\n"
-            "Ya 'Back' se dashboard par wapas jao.",
-            reply_markup=ReplyKeyboardMarkup([["HW Input"], ["Back"]], resize_keyboard=True)
+            "Daily plan banane ke liye 'Generate My Daily Plan' dabao.",
+            reply_markup=ReplyKeyboardMarkup(MENTORSHIP_TABS_KB, resize_keyboard=True)
         )
         return True
 
@@ -5968,7 +5966,7 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
             
         await update.message.reply_text(
             "📈 Welcome to My Mentorship!\n\nSelect an option below to view your progress or manage your day:",
-            reply_markup=ReplyKeyboardMarkup(MENTORSHIP_CLEAN_MENU, resize_keyboard=True)
+            reply_markup=ReplyKeyboardMarkup(MENTORSHIP_TABS_KB, resize_keyboard=True)
         )
         return True
 
@@ -6609,179 +6607,12 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "My Personal Mentor":
         await mentorship(update, context)
         return
-    elif text == "Show Mentorship Progress":
-        student = get_student_by_telegram(uid)
-        if not student: return
-        today = today_ist_date()
-        tasks = get_student_tasks(student["id"], scheduled_date=today)
-        
-        if not tasks:
-            dashboard_text = (
-                f"📊 *Mentorship Progress*\n"
-                f"━━━━━━━━━━━━━━━━━━\n"
-                f"👤 Student: {student['name']}\n"
-                f"🎯 Goal: {student.get('exam_target', 'JEE')}\n"
-                f"📅 Date: {today.strftime('%d %b %Y')}\n\n"
-                f"⏸️ *Status: Inactive*\n"
-                f"Aaj ke liye koi tasks scheduled nahi hain. Homework send karein plan activate karne ke liye! ✨"
-            )
-        else:
-            completion = calculate_completion_percentage(tasks)
-            pending_tasks = [t for t in tasks if t.get("status") == "pending"]
-            pending_count = len(pending_tasks)
-            
-            pending_list_str = ""
-            if pending_tasks:
-                pending_list_str = "\n⏳ *Pending Tasks:*\n"
-                for idx, t in enumerate(pending_tasks, 1):
-                    pending_list_str += f"{idx}. {t.get('subject')} - {t.get('topic')}\n"
-            
-            dashboard_text = (
-                f"📊 *Mentorship Progress*\n"
-                f"━━━━━━━━━━━━━━━━━━\n"
-                f"👤 Student: {student['name']}\n"
-                f"🎯 Goal: {student.get('exam_target', 'JEE')}\n"
-                f"📅 Date: {today.strftime('%d %b %Y')}\n\n"
-                f"✅ Aaj ka kaam: {completion}%\n"
-                f"⏳ Total Pending: {pending_count}\n"
-                f"{pending_list_str}\n"
-                f"💪 Consistency Score: {student.get('consistency_score', 0)}%\n\n"
-                f"Aap bahut acha kar rahe ho, bas lage raho! Happy learning with MP Sir! ✨"
-            )
-            
-        await update.message.reply_text(dashboard_text, parse_mode="Markdown", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_CLEAN_MENU, resize_keyboard=True))
-        return
-    elif text == "Start Mentorship Flow":
-        student = get_student_by_telegram(uid)
-        if not student or not student.get("is_approved"):
-            await update.message.reply_text("⏳ Mentorship approval ke baad yeh feature available hoga.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_CLEAN_MENU, resize_keyboard=True))
-            return
-        # Check if today's timetable is saved
-        today_day = weekday_name(today_ist())
-        timetable = get_weekday_timetable(student["id"], today_day)
-        has_timetable = timetable and timetable.get("slots")
-        if has_timetable:
-            # Timetable saved → show HW Input
-            upd_user(uid, {"step": "mentor_ready"})
-            await update.message.reply_text(
-                "✅ Aaj ka timetable saved hai!\n\n📝 Ab apna homework input karo:",
-                reply_markup=ReplyKeyboardMarkup([["HW Input"], ["Back"]], resize_keyboard=True)
-            )
-        else:
-            # No timetable → directly ask for date
-            upd_user(uid, {"step": "mentor_timetable_date"})
-            await update.message.reply_text(
-                "📅 *Timetable Save Karo*\n\n"
-                "Step 1: Kis din ka timetable save karna hai?\n"
-                "Format: DD/MM/YYYY\n\n"
-                "Example: 30/04/2026\n\n"
-                "⚠️ _Sirf aane waale dinon (future dates) ka timetable allowed hai._",
-                reply_markup=ReplyKeyboardMarkup([["Back", "Ask Doubt"]], resize_keyboard=True),
-                parse_mode="Markdown"
-            )
-        return
-
-
-    elif text == "Timetable Input":
-        student = get_student_by_telegram(uid)
-        if not student or not student.get("is_approved"):
-            await update.message.reply_text("⏳ Mentorship approval ke baad yeh feature available hoga.")
-            return
-        upd_user(uid, {"step": "mentor_timetable_date"})
+    elif text in {"Show Mentorship Progress", "Start Mentorship Flow", "Timetable Input", "HW Input", "Active Mentorship Schedule for Day"}:
+        upd_user(uid, {"step": "mentor_tab_selection"})
         await update.message.reply_text(
-            "📅 Kis din ka timetable save karna hai?\nFormat: DD/MM/YYYY (Example: 30/04/2026)\n\n⚠️ Note: Sirf aane waale dinon ka timetable allowed hai.",
-            reply_markup=ReplyKeyboardMarkup([["Back", "Ask Doubt"]], resize_keyboard=True)
+            "My Personal Mentor mein naya flow use karo:",
+            reply_markup=ReplyKeyboardMarkup(MENTORSHIP_TABS_KB, resize_keyboard=True)
         )
-        return
-
-    elif text == "HW Input":
-        student = get_student_by_telegram(uid)
-        if not student or not student.get("is_approved"):
-            await update.message.reply_text("⏳ Mentorship approval ke baad yeh feature available hoga.")
-            return
-        
-        # Check if today's timetable is saved
-        today_day = weekday_name(today_ist())
-        timetable = get_weekday_timetable(student["id"], today_day)
-        if not timetable or not timetable.get("slots"):
-            await update.message.reply_text(
-                "❌ Aaj ke liye koi timetable saved nahi hai.\nPehle 'Start Mentorship Flow' se timetable save karo.",
-                reply_markup=ReplyKeyboardMarkup([["Start Mentorship Flow"], ["Back"]], resize_keyboard=True)
-            )
-            return
-
-        # Check if all classes are done
-        today_tasks = get_student_tasks(student["id"], scheduled_date=today_ist_date())
-        pending_classes = [t for t in today_tasks if t.get("type") == "CLASS" and t.get("status") == "pending"]
-        
-        # If there are classes in timetable but no tasks yet, or tasks are pending
-        if pending_classes:
-            await update.message.reply_text(
-                "⚠️ *HW update possible only after class completion.*\n\n"
-                "Jab aapki aaj ki saari classes khatam ho jayengi, tabhi aap HW details de payenge.",
-                parse_mode="Markdown",
-                reply_markup=ReplyKeyboardMarkup(MENTORSHIP_CLEAN_MENU, resize_keyboard=True)
-            )
-            return
-
-        subjects = [s.get("subject") for s in timetable.get("slots", []) if s.get("subject") and s.get("type") != "free"]
-        if not subjects:
-            await update.message.reply_text("❌ Aaj koi subject classes nahi hain.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_CLEAN_MENU, resize_keyboard=True))
-            return
-            
-        await start_sequential_hw_flow(update, context, student)
-        return
-
-    elif text == "Active Mentorship Schedule for Day":
-        student = get_student_by_telegram(uid)
-        if not student or not student.get("is_approved"):
-            await update.message.reply_text("⏳ Mentorship approval ke baad yeh feature available hoga.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_CLEAN_MENU, resize_keyboard=True))
-            return
-        today_day = weekday_name(today_ist())
-        timetable = get_weekday_timetable(student["id"], today_day)
-        has_timetable = timetable and timetable.get("slots")
-        if not has_timetable:
-            await update.message.reply_text(
-                "⚠️ Aaj ka timetable save nahi hua hai.\n\nPehle mentorship flow poora karo:\n1️⃣ 'Start Mentorship Flow' dabao\n2️⃣ Timetable save karo\n3️⃣ HW Input do\n4️⃣ Planner generate hoga",
-                reply_markup=ReplyKeyboardMarkup([["Start Mentorship Flow"], ["Back"]], resize_keyboard=True)
-            )
-            return
-        # Build today's full schedule
-        slots = timetable.get("slots", [])
-        timetable_lines = []
-        for s in slots:
-            subj = s.get("subject", "?")
-            start = s.get("start", "")
-            end = s.get("end", "")
-            slot_type = s.get("type", "class")
-            if slot_type == "free":
-                timetable_lines.append(f"🔓 {start}-{end}: Free Time")
-            else:
-                timetable_lines.append(f"📚 {start}-{end}: {subj}")
-        timetable_text = "\n".join(timetable_lines) if timetable_lines else "No slots found."
-        # Check if planner exists for today
-        today_tasks = get_student_tasks(student["id"], scheduled_date=today_ist_date())
-        hw_tasks = [t for t in today_tasks if t.get("type") in ("HW", "REVISION", "BACKLOG", "PENDING")]
-        if not hw_tasks:
-            schedule_msg = (
-                f"📅 *Aaj Ka Schedule — {today_ist().strftime('%d %b %Y (%A)')}*\n"
-                f"━━━━━━━━━━━━━━━━\n\n"
-                f"🏫 *Timetable:*\n{timetable_text}\n\n"
-                f"⚠️ Planner abhi generate nahi hua.\n'HW Input' do aur planner banwao!"
-            )
-        else:
-            planner_lines = []
-            for t in hw_tasks:
-                emoji = {"HW": "📝", "REVISION": "📖", "BACKLOG": "🔁", "PENDING": "⏳"}.get(t.get("type", ""), "📌")
-                status_emoji = "✅" if t.get("status") == "done" else "⬜"
-                planner_lines.append(f"{status_emoji} {emoji} *{t.get('subject', '?')}* — {t.get('topic', t.get('descript', ''))[:50]}")
-            schedule_msg = (
-                f"📅 *Aaj Ka Full Schedule — {today_ist().strftime('%d %b %Y (%A)')}*\n"
-                f"━━━━━━━━━━━━━━━━\n\n"
-                f"🏫 *Classes:*\n{timetable_text}\n\n"
-                f"📋 *Aaj Ka Planner:*\n" + "\n".join(planner_lines)
-            )
-        await update.message.reply_text(schedule_msg, parse_mode="Markdown", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_CLEAN_MENU, resize_keyboard=True))
         return
     elif text == "Backlogs":
         upd_user(uid, {"step": "mentor_backlog_ready"})
