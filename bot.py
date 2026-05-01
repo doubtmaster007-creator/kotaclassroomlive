@@ -110,7 +110,7 @@ BACKLOGS_MENU = [["Check Backlogs", "Add Backlogs"], ["Back", "Ask Doubt"]]
 # Integrated Two-Tab Mentorship UI
 MENTORSHIP_TABS_KB = [
     ["Backlogs", "Daily Planner"],
-    ["Back", "Ask Doubt"]
+    ["Show My Self-Study Planner", "Ask Doubt"]
 ]
 
 TAB1_BACKLOG_OPTS_KB = [
@@ -4556,8 +4556,9 @@ async def mentorship(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "━━━━━━━━━━━━━━━━━━━━\n\n"
                     "Select a Tab to manage your preparation:\n\n"
                     "📚 *Backlogs Coverage* — Purane topics cover karein\n"
-                    "📅 *Daily Study Planner* — Aaj ka schedule manage karein\n\n"
-                    "💡 *Tip:* Daily plan generate karne ke liye Planner tab use karein."
+                    "📅 *Daily Study Planner* — Naya plan generate karein\n"
+                    "📋 *Show My Planner* — Aaj ke tasks dekhein\n\n"
+                    "💡 *Tip:* Type `done [ID]` (e.g. `done ab12`) to mark tasks as finished!"
                 )
                 
                 await update.message.reply_text(
@@ -5001,6 +5002,25 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
                 reply_markup=ReplyKeyboardMarkup([["Yes", "No"], ["Back"]], resize_keyboard=True), 
                 parse_mode="Markdown"
             )
+        elif text == "Show My Self-Study Planner":
+            # Show the planner list directly from main dashboard
+            tasks = get_student_tasks(student["id"], scheduled_date=today_ist_date())
+            if not tasks:
+                await update.message.reply_text("❌ Aapka aaj ka koi plan nahi mil raha. Naya plan generate karein?", reply_markup=ReplyKeyboardMarkup([["Daily Planner"], ["Backlogs"]], resize_keyboard=True))
+            else:
+                msg = f"📋 *TODAY'S PLANNER*\n"
+                msg += f"📅 Date: {today_ist_date().strftime('%d %b %Y')}\n"
+                msg += "━━━━━━━━━━━━━━━━━━━━\n\n"
+                emoji_map = {"HW": "📝", "REVISION": "📖", "BACKLOG": "🔁", "PENDING": "⏳", "OTHER": "📌", "CLASS": "🏫"}
+                for t in tasks:
+                    status_emoji = "✅" if t["status"] == "done" else "⭕"
+                    type_emoji = emoji_map.get(t["type"], "📝")
+                    short_id = str(t["id"])[:4]
+                    msg += f"{status_emoji} {type_emoji} `{short_id}`: *{t['subject']}*\n"
+                    msg += f"└ {t['topic']}\n\n"
+                msg += "━━━━━━━━━━━━━━━━━━━━\n"
+                msg += "💡 *To Mark Done:* Type `done [ID]`"
+                await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_TABS_KB, resize_keyboard=True))
         elif text == "Daily Planner":
             # Show the Planner Sub-Menu instead of jumping to date entry
             upd_user(uid, {"step": "mentor_planner_ready"})
