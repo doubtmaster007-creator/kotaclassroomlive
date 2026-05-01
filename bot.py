@@ -3686,7 +3686,13 @@ async def run_mentorship_cycle(bot):
                     if 2 <= diff_hours < 4 and not log.get("nudge_1_sent"):
                         await bot.send_message(
                             chat_id=int(student["telegram_id"]),
-                            text="👋 *2-Hour Progress Check!*\n\nAaj ke planner tasks ka kya status hai? Jo complete ho gaye hain unhe mark kar dijiye! 💪\n\nType `Show My Self-Study Planner` to see your list.",
+                            text=(
+                                "👋 *Quick Check (2hr)*\n"
+                                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                                "Aapke daily planner tasks ka kya status hai? 🤔\n\n"
+                                "Jo complete ho gaye hain, unhe *Mark Done* kar dijiye. It keeps you consistent! 💪\n\n"
+                                "👉 `Show My Self-Study Planner` click karein."
+                            ),
                             parse_mode="Markdown"
                         )
                         update_daily_log(log["id"], {"nudge_1_sent": True})
@@ -3695,7 +3701,13 @@ async def run_mentorship_cycle(bot):
                     elif 4 <= diff_hours < 6 and not log.get("nudge_2_sent"):
                         await bot.send_message(
                             chat_id=int(student["telegram_id"]),
-                            text="🔔 *4-Hour Reminder!*\n\nAdha din nikal gaya hai! Apne planner ko check karein aur completed tasks update karein. 📋",
+                            text=(
+                                "🔔 *Half-Day Reminder (4hr)*\n"
+                                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                                "Adha din nikal gaya hai! 🕒\n\n"
+                                "Apne planner ko check karein aur pending tasks ko finish karne ka try karein. 📋\n\n"
+                                "Consistency is the key to Kota Success! 🚀"
+                            ),
                             parse_mode="Markdown"
                         )
                         update_daily_log(log["id"], {"nudge_2_sent": True})
@@ -3704,7 +3716,12 @@ async def run_mentorship_cycle(bot):
                     elif 6 <= diff_hours < 7 and not log.get("nudge_3_sent"):
                         await bot.send_message(
                             chat_id=int(student["telegram_id"]),
-                            text="🚀 *6-Hour Final Nudge!*\n\nAlmost there! Aaj ke bache hue tasks finish karein. ✨\n\nType `Show My Self-Study Planner` to see remaining work.",
+                            text=(
+                                "🚀 *Final Nudge (6hr)*\n"
+                                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                                "Almost done! Aaj ke bache hue tasks finish karein. ✨\n\n"
+                                "Last stretch mein apna best dein! Target ke aur karib. 🎯"
+                            ),
                             parse_mode="Markdown"
                         )
                         update_daily_log(log["id"], {"nudge_3_sent": True})
@@ -4040,19 +4057,21 @@ async def send_daily_planner_summary(bot, student: Dict[str, Any], date_val: dat
     
     if total == 0: return
 
-    msg = f"📋 *Daily Progress Summary ({date_val.strftime('%d/%m/%Y')})*\n━━━━━━━━━━━━━━━━━━\n\n"
+    msg = f"📊 *DAILY PROGRESS SUMMARY*\n"
+    msg += f"📅 Date: {date_val.strftime('%d %b %Y')}\n"
+    msg += "━━━━━━━━━━━━━━━━━━━━\n\n"
     msg += f"✅ *Completed:* {len(completed)}/{total}\n"
-    msg += f"⏳ *Pending:* {len(pending)}/{total}\n\n"
+    msg += f"⏳ *Pending:* {len(pending)}/{total}\n"
+    msg += "━━━━━━━━━━━━━━━━━━━━\n\n"
     
     if pending:
-        msg += "*Pending Tasks:*\n"
+        msg += "📌 *Pending Tasks:*\n"
         for t in pending:
-            # Use first 4 chars of UUID as a short ID for the student
             short_id = str(t["id"])[:4]
             msg += f"• `{short_id}`: {t.get('subject')} - {t.get('topic')}\n"
-        msg += "\nMark done by typing: `done [ID]` (e.g., `done ab12`)"
+        msg += "\n💡 *To Mark Done:* Type `done [ID]`"
     else:
-        msg += "🎉 *Congratulations!* Aapne aaj ke saare tasks complete kar liye hain. Bohot badhiya! 🚀"
+        msg += "🎉 *CONGRATULATIONS!*\n\nAapne aaj ke saare tasks complete kar liye hain. Your dedication is inspiring! 🚀"
     
     try:
         await bot.send_message(chat_id=int(student["telegram_id"]), text=msg, parse_mode="Markdown")
@@ -4511,13 +4530,26 @@ async def mentorship(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if student:
             if student.get("is_approved"):
                 upd_user(uid, {"step": "mentor_tab_selection"})
-                await update.message.reply_text(
-                    "╔═════════════════════════════════╗\n"
-                    "║       MY PERSONAL MENTOR        ║\n"
-                    "╚═════════════════════════════════╝\n\n"
+                
+                # Fetch more details for personalization
+                batch = student.get("batch_name", "Regular")
+                exam = student.get("exam_target", "JEE/NEET")
+                
+                dashboard_text = (
+                    "✨ *MY PERSONAL MENTOR* ✨\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n\n"
+                    f"👤 *Student:* {student.get('name')}\n"
+                    f"🎯 *Target:* {exam}\n"
+                    f"📦 *Batch:* {batch}\n\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n\n"
                     "Select a Tab to manage your preparation:\n\n"
-                    "📚 *Backlogs Coverage*\n"
-                    "📅 *Daily Study Planner*",
+                    "📚 *Backlogs Coverage* — Purane topics cover karein\n"
+                    "📅 *Daily Study Planner* — Aaj ka schedule manage karein\n\n"
+                    "💡 *Tip:* Daily plan generate karne ke liye Planner tab use karein."
+                )
+                
+                await update.message.reply_text(
+                    dashboard_text,
                     parse_mode="Markdown",
                     reply_markup=ReplyKeyboardMarkup(MENTORSHIP_TABS_KB, resize_keyboard=True)
                 )
@@ -4934,10 +4966,25 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
     if step == "mentor_tab_selection":
         if text == "Backlogs":
             upd_user(uid, {"step": "mentor_backlog_ready"})
-            await update.message.reply_text("📚 *Backlogs Coverage*\n\nReady to add backlog?", reply_markup=ReplyKeyboardMarkup([["Yes", "No"], ["Back"]], resize_keyboard=True), parse_mode="Markdown")
+            await update.message.reply_text(
+                "📚 *BACKLOGS COVERAGE*\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "Purane pending topics ko systematically cover karne ke liye ready hain? ✨\n\n"
+                "Kya aap abhi koi backlog add karna chahte hain?", 
+                reply_markup=ReplyKeyboardMarkup([["Yes", "No"], ["Back"]], resize_keyboard=True), 
+                parse_mode="Markdown"
+            )
         elif text in {"Daily Planner", "Generate My Daily Plan"}:
             upd_user(uid, {"step": "mentor_planner_date"})
-            await update.message.reply_text("📅 *Daily Study Planner*\n\nEnter date for class? (Format: DD/MM/YYYY)\nExample: 30/04/2026", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True), parse_mode="Markdown")
+            await update.message.reply_text(
+                "📅 *DAILY STUDY PLANNER*\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "Aaj ka schedule optimize karne ke liye AI aapke timetable aur homework ka use karega! 🚀\n\n"
+                "📅 *Kis date ke liye plan generate karna hai?*\n"
+                "Format: DD/MM/YYYY (Example: 30/04/2026)", 
+                reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True), 
+                parse_mode="Markdown"
+            )
         return True
 
     # TAB 1: BACKLOGS FLOW
@@ -5214,19 +5261,24 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         elif text == "Show My Self-Study Planner":
             tasks = get_student_tasks(student["id"], scheduled_date=today_ist_date())
             if not tasks:
-                await update.message.reply_text("Aapka aaj ka koi plan nahi mil raha. Naya plan generate karein?", reply_markup=ReplyKeyboardMarkup([["Generate My Daily Plan"], ["Back"]], resize_keyboard=True))
+                await update.message.reply_text("❌ Aapka aaj ka koi plan nahi mil raha. Naya plan generate karein?", reply_markup=ReplyKeyboardMarkup([["Generate My Daily Plan"], ["Back"]], resize_keyboard=True))
             else:
-                msg = f"📋 *Today's Planner ({today_ist_date().strftime('%d/%m/%Y')})*\n━━━━━━━━━━━━━━━━━━\n\n"
-                emoji_map = {"HW": "📝", "REVISION": "📖", "BACKLOG": "🔁", "PENDING": "⏳", "OTHER": "📌"}
+                msg = f"📋 *TODAY'S PLANNER*\n"
+                msg += f"📅 Date: {today_ist_date().strftime('%d %b %Y')}\n"
+                msg += "━━━━━━━━━━━━━━━━━━━━\n\n"
+                
+                emoji_map = {"HW": "📝", "REVISION": "📖", "BACKLOG": "🔁", "PENDING": "⏳", "OTHER": "📌", "CLASS": "🏫"}
                 
                 for t in tasks:
-                    status_emoji = "✅" if t["status"] == "done" else "⏳"
+                    status_emoji = "✅" if t["status"] == "done" else "⭕"
                     type_emoji = emoji_map.get(t["type"], "📝")
                     short_id = str(t["id"])[:4]
-                    msg += f"{status_emoji} {type_emoji} `{short_id}`: *{t['subject']}* - {t['topic']}\n"
+                    msg += f"{status_emoji} {type_emoji} `{short_id}`: *{t['subject']}*\n"
+                    msg += f"└ {t['topic']}\n\n"
                 
-                msg += "\n💡 *Tip:* Mark done using `done [ID]` (e.g., `done ab12`)\n"
-                msg += "Skip task using `skip [ID]`"
+                msg += "━━━━━━━━━━━━━━━━━━━━\n"
+                msg += "💡 *To Mark Done:* Type `done [ID]`\n"
+                msg += "Example: `done ab12`"
                 
                 await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=ReplyKeyboardMarkup(TAB2_PLANNER_OPTS_KB, resize_keyboard=True))
         elif text == "Switch to Backlogs":
