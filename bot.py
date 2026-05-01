@@ -64,6 +64,7 @@ claim_timeout_tasks: Dict[str, asyncio.Task] = {}
 student_reminder_task: Optional[asyncio.Task] = None
 mentorship_scheduler_task: Optional[asyncio.Task] = None
 add_teacher_sessions: Dict[int, Dict] = {}  # admin_id -> {step, name, phone, subject, stream}
+GLOBAL_WAIT_ACTIVE_USERS: set[int] = set()
 
 CLASS_OPTIONS = [["11", "12"]]
 SUBJECT_OPTIONS = [["Physics", "Chemistry", "Mathematics", "Biology"], ["Cancel Doubt"]]
@@ -2121,7 +2122,11 @@ def today_ist_date():
 def iso_date(dt) -> str:
     return dt.isoformat() if hasattr(dt, "isoformat") else str(dt)
 
-def start_delayed_wait_message(message_obj, text: str = "Please wait, under process...", delay_seconds: float = 2.0):
+def start_delayed_wait_message(message_obj, text: str = "Please wait, under process...", delay_seconds: float = 2.0, force: bool = False):
+    chat_id = getattr(message_obj, "chat_id", None)
+    if chat_id in GLOBAL_WAIT_ACTIVE_USERS and not force:
+        return None
+
     async def _sender():
         frames = [
             f"{text} ⏳",
@@ -2156,6 +2161,23 @@ async def stop_delayed_wait_message(task: Optional[asyncio.Task]):
         pass
     except Exception:
         pass
+
+async def reset_to_main_menu_with_processing(update: Update, uid: int, message: str = "Main menu par wapas. 👇"):
+    try:
+        await update.message.reply_text("Please wait, under process... ⏳")
+    except Exception:
+        pass
+    upd_user(uid, {
+        "step": "ready_for_new_doubt",
+        "awaiting_feedback": 0,
+        "awaiting_no_choice": 0,
+        "awaiting_rating": 0,
+        "awaiting_teacher_feedback_qid": None,
+    })
+    await update.message.reply_text(
+        message,
+        reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True)
+    )
 
 def is_faculty_user(user_id: int) -> bool:
     c = db(); cur = db_cursor(c)
@@ -2688,6 +2710,11 @@ def default_hw_subjects_for_student(student: Dict[str, Any]) -> List[str]:
     if "neet" in goal_text or "biology" in goal_text or "bio" in goal_text:
         return ["Physics", "Chemistry", "Biology"]
     return ["Physics", "Chemistry", "Mathematics"]
+
+def get_timetable_class_slots(timetable: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not timetable:
+        return []
+    return timetable.get("coaching_slots") or timetable.get("slots") or []
 
 def ins_doubt(data: Dict[str, Any]):
     c = db(); cur = db_cursor(c); ts = now_iso()
@@ -4401,21 +4428,23 @@ async def mentorship(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Smart Check: Use existing profile if available
     u = get_user(uid)
     if u and u.get("name") and u.get("phone") and u.get("profile_complete"):
-        upd_user(uid, {"step": "mentor_confirm_existing"})
+        student = upsert_student_by_telegram(uid, {"name": u.get("name"), "phone": u.get("phone")})
+        upd_user(uid, {"step": "mentor_waiting_approval", "mentorship_student_id": str(student["id"])})
+        await context.bot.send_message(
+            chat_id=MENTORSHIP_GROUP_ID,
+            text=f"New Mentorship Verification Request (Existing Profile)\nName: {student.get('name')}\nPhone: {student.get('phone')}\nTelegram ID: {uid}\nUse /accept_student {uid}"
+        )
         await update.message.reply_text(
-            f"✨ Aapka existing profile mil gaya hai!\n\n"
-            f"👤 Name: {u['name']}\n"
-            f"📱 Phone: {u['phone']}\n\n"
-            "Kya aap yahi details use karke Mentorship shuru karna chahte hain?",
-            reply_markup=ReplyKeyboardMarkup([["Yes, use these details", "No, register fresh"], ["Cancel Registration"]], resize_keyboard=True)
+            "✅ Aapki existing details se mentorship approval request faculty group me bhej di gayi hai. Approval ke baad aage badhenge.",
+            reply_markup=ReplyKeyboardRemove()
         )
         return
 
-    upd_user(uid, {"mentorship_mode": "registering", "step": "mentor_phone"})
+    upd_user(uid, {"mentorship_mode": "registering", "step": "mentor_name"})
     clear_mentorship_temp(uid)
     await update.message.reply_text(
-        "✨ JEE Mentorship Program mein swagat hai!\n\nRegistration shuru karte hain.\nStep 1: Apna number verify karein niche diye gaye button se 👇",
-        reply_markup=ReplyKeyboardMarkup([[KeyboardButton("Verify My Phone Number 📱", request_contact=True)], ["Cancel Registration"]], resize_keyboard=True)
+        "✨ JEE Mentorship Program mein swagat hai!\n\nRegistration shuru karte hain.\nStep 1: Aapka poora naam kya hai? (First Name + Last Name)",
+        reply_markup=ReplyKeyboardMarkup([["Cancel Registration"]], resize_keyboard=True)
     )
 
 async def finish_registration_and_ask_first_timetable(update: Update, uid: int):
@@ -4559,8 +4588,9 @@ async def start_sequential_hw_flow(update, context, student):
     timetable = get_weekday_timetable(student["id"], target_day)
     
     subjects = []
-    if timetable and timetable.get("slots"):
-        for s in timetable["slots"]:
+    class_slots = get_timetable_class_slots(timetable)
+    if class_slots:
+        for s in class_slots:
             subj = s.get("subject")
             slot_type = s.get("type", "class")
             if subj and slot_type != "free" and subj not in subjects:
@@ -5082,7 +5112,11 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
             await update.message.reply_text("Ready to add backlog?", reply_markup=ReplyKeyboardMarkup([["Yes", "No"], ["Back"]], resize_keyboard=True))
         elif text == "Back":
             upd_user(uid, {"step": "mentor_planner_timetable"})
-            await update.message.reply_text("Enter timetable (Subject - Time in hr:min)", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True))
+            await update.message.reply_text(
+                "Class start time AM/PM ke saath bhejo:\n\n"
+                "Example:\nBiology - 09:00 AM\nChemistry - 11:30 AM\nPhysics - 02:00 PM",
+                reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True)
+            )
         return True
 
     if parent_student and text in {"Yes", "No"}:
@@ -5152,20 +5186,11 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         return True
 
     if step == "mentor_confirm_existing":
-        if text == "Yes, use these details":
-            student = upsert_student_by_telegram(uid, {"name": u.get("name"), "phone": u.get("phone")})
-            upd_user(uid, {"step": "mentor_waiting_approval", "mentorship_student_id": str(student["id"])})
-            await context.bot.send_message(chat_id=MENTORSHIP_GROUP_ID, text=f"New Mentorship Verification Request (Existing Profile)\nName: {student.get('name')}\nPhone: {student.get('phone')}\nTelegram ID: {uid}\nUse /accept_student {uid}")
-            await update.message.reply_text("✅ Previous details use kar li gayi hain! Approval request faculty group me bhej di gayi hai. Approval ke baad aage badhenge.", reply_markup=ReplyKeyboardRemove())
-            return True
-        elif text == "No, register fresh":
-            upd_user(uid, {"mentorship_mode": "registering", "step": "mentor_phone"})
-            clear_mentorship_temp(uid)
-            await update.message.reply_text("Theek hai, fresh registration karte hain.\n\nStep 1: Apna number verify karein 👇", reply_markup=ReplyKeyboardMarkup([[KeyboardButton("Verify My Phone Number 📱", request_contact=True)], ["Cancel Registration"]], resize_keyboard=True))
-            return True
-        else:
-            await update.message.reply_text("Please choose one option.", reply_markup=ReplyKeyboardMarkup([["Yes, use these details", "No, register fresh"], ["Cancel Registration"]], resize_keyboard=True))
-            return True
+        student = upsert_student_by_telegram(uid, {"name": u.get("name"), "phone": u.get("phone")})
+        upd_user(uid, {"step": "mentor_waiting_approval", "mentorship_student_id": str(student["id"])})
+        await context.bot.send_message(chat_id=MENTORSHIP_GROUP_ID, text=f"New Mentorship Verification Request (Existing Profile)\nName: {student.get('name')}\nPhone: {student.get('phone')}\nTelegram ID: {uid}\nUse /accept_student {uid}")
+        await update.message.reply_text("✅ Existing details se approval request faculty group me bhej di gayi hai. Approval ke baad aage badhenge.", reply_markup=ReplyKeyboardRemove())
+        return True
 
     if text.lower().startswith("backlog:") and student and student.get("is_approved"):
         raw = text.split(":", 1)[1].strip()
@@ -5184,16 +5209,47 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         return True
 
     if step == "mentor_name":
-        upsert_student_by_telegram(uid, {"name": text})
+        if not text or not is_valid_name_format(text):
+            await update.message.reply_text(
+                "❌ Naam sahi format mein bhejo (First Name + Last Name).",
+                reply_markup=ReplyKeyboardMarkup([["Cancel Registration"]], resize_keyboard=True)
+            )
+            return True
+        upsert_student_by_telegram(uid, {"name": text.strip()})
         upd_user(uid, {"step": "mentor_phone"})
-        await update.message.reply_text("Phone number bhejo.")
+        await update.message.reply_text(
+            "Step 2: Apna number verify karein niche diye gaye button se 👇",
+            reply_markup=ReplyKeyboardMarkup([[KeyboardButton("Verify My Phone Number 📱", request_contact=True)]], resize_keyboard=True)
+        )
         return True
 
     if step == "mentor_phone":
-        student = upsert_student_by_telegram(uid, {"phone": re.sub(r"\D", "", text)})
+        if not update.message.contact:
+            await update.message.reply_text(
+                "❌ Number verify karne ke liye niche wala button use karein 👇",
+                reply_markup=ReplyKeyboardMarkup([[KeyboardButton("Verify My Phone Number 📱", request_contact=True)]], resize_keyboard=True)
+            )
+            return True
+        contact = update.message.contact
+        if contact.user_id and contact.user_id != uid:
+            await update.message.reply_text(
+                "❌ Kripya apna hi contact share karein.",
+                reply_markup=ReplyKeyboardMarkup([[KeyboardButton("Verify My Phone Number 📱", request_contact=True)]], resize_keyboard=True)
+            )
+            return True
+        phone_clean = re.sub(r"\D", "", contact.phone_number or "")
+        if len(phone_clean) > 10:
+            phone_clean = phone_clean[-10:]
+        if not is_valid_phone_format(phone_clean):
+            await update.message.reply_text(
+                "❌ Invalid phone number. Please button se dobara verify karein.",
+                reply_markup=ReplyKeyboardMarkup([[KeyboardButton("Verify My Phone Number 📱", request_contact=True)]], resize_keyboard=True)
+            )
+            return True
+        student = upsert_student_by_telegram(uid, {"phone": phone_clean})
         upd_user(uid, {"step": "mentor_waiting_approval", "mentorship_student_id": str(student["id"])})
         await context.bot.send_message(chat_id=MENTORSHIP_GROUP_ID, text=f"New Mentorship Verification Request\nName: {student.get('name')}\nPhone: {student.get('phone')}\nTelegram ID: {uid}\nUse /accept_student {uid}")
-        await update.message.reply_text("Verification request faculty group me chali gayi hai. Approval ke baad onboarding continue hoga.")
+        await update.message.reply_text("Verification request faculty group me chali gayi hai. Approval ke baad onboarding continue hoga.", reply_markup=ReplyKeyboardRemove())
         return True
 
     if step == "mentor_waiting_approval":
@@ -6567,6 +6623,25 @@ async def handle_uturn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Flow reset kar diya gaya hai. Wapas menu par 👇", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
 
 
+async def handle_user_with_global_wait(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or update.message.chat.id == GROUP_CHAT_ID:
+        return await handle_user(update, context)
+
+    uid = update.message.from_user.id
+    GLOBAL_WAIT_ACTIVE_USERS.add(uid)
+    wait_task = start_delayed_wait_message(
+        update.message,
+        "Please wait, under process...",
+        delay_seconds=2.0,
+        force=True
+    )
+    try:
+        await handle_user(update, context)
+    finally:
+        await stop_delayed_wait_message(wait_task)
+        GLOBAL_WAIT_ACTIVE_USERS.discard(uid)
+
+
 async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.chat.id == GROUP_CHAT_ID:
         return
@@ -6594,9 +6669,8 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🔄 Flow refresh kar diya gaya hai. Wapas main menu par 👇", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
         return
 
-    if text == "Cancel Doubt":
-        upd_user(uid, {"step": "ready_for_new_doubt"})
-        await update.message.reply_text("Doubt canceled. Main menu par wapas. 👇", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
+    if text.strip().casefold() in {"cancel doubt", "cancel"}:
+        await reset_to_main_menu_with_processing(update, uid, "Doubt canceled. Main menu par wapas. 👇")
         return
 
     if text == "Ask Doubt":
@@ -6710,8 +6784,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     low_incoming = incoming.lower()
     if low_incoming in ["uturn", "/uturn", "cancel doubt"]:
-        upd_user(uid, {"step":"ready_for_new_doubt", "awaiting_feedback":0, "awaiting_no_choice":0, "awaiting_rating":0})
-        await update.message.reply_text("Action cancel, flow reset. Wapas menu par 👇", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
+        await reset_to_main_menu_with_processing(update, uid, "Action cancel, flow reset. Wapas menu par 👇")
         return
 
     if low_incoming == "ask doubt":
@@ -6818,8 +6891,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         # Fallback global Back button
-        upd_user(uid, {"step":"ready_for_new_doubt", "awaiting_feedback":0, "awaiting_no_choice":0, "awaiting_rating":0})
-        await update.message.reply_text("Main menu par wapas. 👇", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
+        await reset_to_main_menu_with_processing(update, uid)
         return
 
     if contains_abuse_words(incoming):
@@ -6981,8 +7053,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Issue #3: Handle Cancel button in doubt flow
         if text == "Cancel":
-            upd_user(uid, {"awaiting_no_choice":0, "step":"ready_for_new_doubt", "awaiting_feedback":0, "awaiting_rating":0})
-            await update.message.reply_text("Doubt canceled. Main menu par wapas. 👇", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
+            await reset_to_main_menu_with_processing(update, uid, "Doubt canceled. Main menu par wapas. 👇")
             return
 
         if text == "1. Explain Concept Better":
@@ -7177,7 +7248,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         upd_user(uid, {"name": text.strip(), "step": "phone"})
-        contact_kb = [[KeyboardButton("Share Contact", request_contact=True)], ["Back"]]
+        contact_kb = [[KeyboardButton("Share Contact", request_contact=True)]]
         await update.message.reply_text(
             "Ab apna Phone Number verify karne ke liye niche 'Share Contact' button dabayein 👇",
             reply_markup=ReplyKeyboardMarkup(contact_kb, resize_keyboard=True)
@@ -7185,11 +7256,6 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if step == "phone":
-        if text == "Back":
-            upd_user(uid, {"step": "name"})
-            await update.message.reply_text("Aapka poora naam kya hai? (First Name + Last Name)", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True))
-            return
-
         phone = None
         if update.message.contact:
             c = update.message.contact
@@ -7200,7 +7266,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text(
                 "❌ Valid number ke liye niche diya gaya 'Share Contact' button hi use karein 👇",
-                reply_markup=ReplyKeyboardMarkup([[KeyboardButton("Share Contact", request_contact=True)], ["Back"]], resize_keyboard=True)
+                reply_markup=ReplyKeyboardMarkup([[KeyboardButton("Share Contact", request_contact=True)]], resize_keyboard=True)
             )
             return
         
@@ -7208,7 +7274,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not is_valid_phone_format(phone):
             await update.message.reply_text(
                 "❌ Invalid phone number. Please use 'Share Contact' button.",
-                reply_markup=ReplyKeyboardMarkup([[KeyboardButton("Share Contact", request_contact=True)], ["Back"]], resize_keyboard=True)
+                reply_markup=ReplyKeyboardMarkup([[KeyboardButton("Share Contact", request_contact=True)]], resize_keyboard=True)
             )
             return
         
@@ -7818,7 +7884,7 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_callback_query), group=0)
     app.add_handler(MessageHandler(filters.Chat(GROUP_CHAT_ID) & non_command_messages, handle_group_reply), group=0)
     app.add_handler(MessageHandler(filters.ChatType.PRIVATE & non_command_messages, handle_teacher_dm), group=0)
-    app.add_handler(MessageHandler(non_command_messages & ~filters.Chat(GROUP_CHAT_ID), handle_user), group=1)
+    app.add_handler(MessageHandler(non_command_messages & ~filters.Chat(GROUP_CHAT_ID), handle_user_with_global_wait), group=1)
 
     print("🤖 AI Doubt Bot (PostgreSQL) is running...")
     print("📡 Polling for messages...")
