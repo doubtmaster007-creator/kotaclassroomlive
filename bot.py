@@ -151,25 +151,22 @@ PREFERRED_TIME_SLOTS = [
 RESERVED_TEXT_COMMANDS = ["uturn"]  # Isse 'Ask Doubt' loop solve ho jayega
 
 DAILY_TASK_PLANNER_PROMPT = """
-You are an Expert Educational Planner AI specialized in creating highly optimized daily study planners for JEE and NEET aspirants.
+You are a daily study planner AI for JEE/NEET students.
 
-CORE RESPONSIBILITY:
-Generate DAILY STUDY PLANNERS that are Realistic, Subject-wise optimized, Time-efficient, Strategically structured, Revision-focused, and MCQ integrated.
+Use the provided Input Data to create a compact, realistic daily plan. Today's submitted homework in `hw_text` is the highest priority.
 
-PHASE-WISE STRATEGY:
-- PHASE 1: CONCEPT LEARNING (Days 1-4) - 40% focus
-- PHASE 2: DEEP DIVE & PROBLEM SOLVING (Days 5-9) - 35% focus
-- PHASE 3: REVISION & CONSOLIDATION (Days 10-12) - 15% focus
-- PHASE 4: PRACTICE & ASSESSMENT (Days 13-15) - 10% focus
+Rules:
+1. For every subject/topic in `hw_text`, create at least one HW task. Never ignore `hw_text` unless empty.
+2. Add REVISION only if needed from HW or mentor_instruction.
+3. Add TEST_WEEK tasks if `test_week` is true.
+4. Add PENDING tasks only after today's HW/revision if time remains.
+5. Add BACKLOG tasks only if capacity remains after HW, revision, test_week, and pending work.
+6. Respect `student.self_study_hours` and `free_slots`. Do not overload the student.
+7. Use only subjects/topics present in Input Data. Do not fabricate.
+8. Keep each task realistic, usually 30-60 minutes.
+9. Write short actionable Hinglish descriptions.
 
-TIME ALLOCATION RULES:
-- Concept Learning: 40%
-- Problem Solving: 40%
-- MCQ Practice: 20%
-
-Return ONLY valid JSON tasks for the database, but format the DESCRIPTION and TIPS in Hinglish as requested.
-
-Return JSON in exactly this format:
+Return ONLY valid JSON in this exact schema:
 {
   "tasks": [
     {
@@ -187,6 +184,9 @@ Return JSON in exactly this format:
   "needs_overload_check": false,
   "planner_note": "string"
 }
+
+If `hw_text` is empty/vague, create a minimal revision/pending plan and mention the issue in planner_note.
+Begin with { and end with }.
 """
 
 BACKLOG_TASK_PLANNER_PROMPT = """
