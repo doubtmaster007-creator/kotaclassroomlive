@@ -2971,19 +2971,19 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def handle_parent_language(update: Update, context: ContextTypes.DEFAULT_TYPE, user: Dict[str, Any]):
     step = user["step"]
-    if not step.startswith("parent_lang_select_"):
+    if not step.startswith("p_lang_"):
         return False
     
-    student_uid = int(step.split("_")[3])
+    student_uid = int(step.split("_")[-1])
     text = update.message.text
     VALID_LANGS = ["Hindi", "Marathi", "English", "Tamil", "Kannada"]
     if text not in VALID_LANGS:
         await update.message.reply_text("Sahi bhasha select karein:", reply_markup=ReplyKeyboardMarkup(PARENT_LANGUAGE_OPTIONS, resize_keyboard=True))
         return True
     
-    # Store language temporarily in user state (we'll save to student record after pairing)
+    # Store language temporarily in user state
     upd_user(update.message.from_user.id, {
-        "step": f"parent_agreement_{student_uid}",
+        "step": f"p_agree_{student_uid}",
         "parent_lang_tmp": text
     })
     
@@ -2998,8 +2998,8 @@ async def handle_parent_steps(update: Update, context: ContextTypes.DEFAULT_TYPE
     step = user.get("step", "")
     text = (update.message.text or "").strip()
     
-    if step.startswith("parent_agreement_"):
-        student_uid = int(step.split("_")[2])
+    if step.startswith("p_agree_"):
+        student_uid = int(step.split("_")[-1])
         if text.lower() == "yes":
             lang = user.get("parent_lang_tmp", "English")
             # Complete verification immediately upon "Yes"
@@ -4690,7 +4690,8 @@ async def accept_student(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if sid:
         sid_int = int(sid)
         bot_username = (await context.bot.get_me()).username
-        parent_link = f"https://t.me/{bot_username}?start=parent_{sid}"
+        # Using 'p' prefix to avoid underscore issues in deep links
+        parent_link = f"https://t.me/{bot_username}?start=p{sid}"
         
         upd_user(sid_int, {"mentorship_mode": "approved", "mentorship_student_id": str(student["id"]), "step": "ready_for_new_doubt"})
         
@@ -6401,17 +6402,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Check for Parent Deep Link first
     args = context.args
-    if args and args[0].startswith("parent_"):
+    if args and args[0].startswith("p"):
         ensure_user(uid)
-        student_uid = args[0].split("_")[1]
-        student = get_student_by_telegram(int(student_uid))
-        if student:
-            upd_user(uid, {"step": f"parent_lang_select_{student_uid}"})
-            await update.message.reply_text(
-                f"Pranam! Aap {student['name']} ke parent hain. ✨\n\nReports ke liye apni pasandida bhasha (language) select karein:",
-                reply_markup=ReplyKeyboardMarkup(PARENT_LANGUAGE_OPTIONS, resize_keyboard=True)
-            )
-            return
+        # Extract ID after 'p'
+        student_uid_str = args[0][1:]
+        if student_uid_str.isdigit():
+            student_uid = int(student_uid_str)
+            student = get_student_by_telegram(student_uid)
+            if student:
+                upd_user(uid, {"step": f"p_lang_{student_uid}"})
+                await update.message.reply_text(
+                    f"Pranam! Aap {student['name']} ke parent hain. ✨\n\nReports ke liye apni pasandida bhasha (language) select karein:",
+                    reply_markup=ReplyKeyboardMarkup(PARENT_LANGUAGE_OPTIONS, resize_keyboard=True)
+                )
+                return
 
     ensure_user(uid)
     u = get_user(uid)
