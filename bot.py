@@ -109,7 +109,7 @@ BACKLOGS_MENU = [["Check Backlogs", "Add Backlogs"], ["Back", "Ask Doubt"]]
 
 # Integrated Two-Tab Mentorship UI
 MENTORSHIP_TABS_KB = [
-    ["Backlogs", "Generate My Daily Plan"],
+    ["Backlogs", "Daily Planner"],
     ["Back", "Ask Doubt"]
 ]
 
@@ -4974,7 +4974,19 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
                 reply_markup=ReplyKeyboardMarkup([["Yes", "No"], ["Back"]], resize_keyboard=True), 
                 parse_mode="Markdown"
             )
-        elif text in {"Daily Planner", "Generate My Daily Plan"}:
+        elif text == "Daily Planner":
+            # Show the Planner Sub-Menu instead of jumping to date entry
+            upd_user(uid, {"step": "mentor_planner_ready"})
+            await update.message.reply_text(
+                "📅 *DAILY STUDY PLANNER*\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "Aap yahan se apna aaj ka plan dekh sakte hain ya naya plan generate kar sakte hain. 🚀\n\n"
+                "Niche diye gaye options mein se chunein:",
+                reply_markup=ReplyKeyboardMarkup(TAB2_PLANNER_OPTS_KB, resize_keyboard=True),
+                parse_mode="Markdown"
+            )
+        elif text == "Generate My Daily Plan":
+            # Direct jump to generation flow
             upd_user(uid, {"step": "mentor_planner_date"})
             await update.message.reply_text(
                 "📅 *DAILY STUDY PLANNER*\n"
@@ -4985,6 +4997,42 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
                 reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True), 
                 parse_mode="Markdown"
             )
+        return True
+
+    # TAB 2: PLANNER MENU (Sub-menu after clicking Daily Planner)
+    if step == "mentor_planner_ready":
+        if text == "Generate My Daily Plan":
+            upd_user(uid, {"step": "mentor_planner_date"})
+            await update.message.reply_text(
+                "📅 *Kis date ke liye plan generate karna hai?*\n"
+                "Format: DD/MM/YYYY (Example: 30/04/2026)", 
+                reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True), 
+                parse_mode="Markdown"
+            )
+        elif text == "Show My Self-Study Planner":
+            # Call the existing Show My Self-Study Planner logic
+            tasks = get_student_tasks(student["id"], scheduled_date=today_ist_date())
+            if not tasks:
+                await update.message.reply_text("❌ Aapka aaj ka koi plan nahi mil raha. Naya plan generate karein?", reply_markup=ReplyKeyboardMarkup([["Generate My Daily Plan"], ["Back"]], resize_keyboard=True))
+            else:
+                msg = f"📋 *TODAY'S PLANNER*\n"
+                msg += f"📅 Date: {today_ist_date().strftime('%d %b %Y')}\n"
+                msg += "━━━━━━━━━━━━━━━━━━━━\n\n"
+                emoji_map = {"HW": "📝", "REVISION": "📖", "BACKLOG": "🔁", "PENDING": "⏳", "OTHER": "📌", "CLASS": "🏫"}
+                for t in tasks:
+                    status_emoji = "✅" if t["status"] == "done" else "⭕"
+                    type_emoji = emoji_map.get(t["type"], "📝")
+                    short_id = str(t["id"])[:4]
+                    msg += f"{status_emoji} {type_emoji} `{short_id}`: *{t['subject']}*\n"
+                    msg += f"└ {t['topic']}\n\n"
+                msg += "━━━━━━━━━━━━━━━━━━━━\n"
+                msg += "💡 *To Mark Done:* Type `done [ID]`"
+                await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=ReplyKeyboardMarkup(TAB2_PLANNER_OPTS_KB, resize_keyboard=True))
+        elif text == "Switch to Backlogs":
+            upd_user(uid, {"step": "mentor_backlog_ready"})
+            await update.message.reply_text("📚 *BACKLOGS COVERAGE*\n\nReady to add backlog?", reply_markup=ReplyKeyboardMarkup([["Yes", "No"], ["Back"]], resize_keyboard=True), parse_mode="Markdown")
+        elif text == "Back":
+            await mentorship(update, context)
         return True
 
     # TAB 1: BACKLOGS FLOW
@@ -5163,9 +5211,19 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         if text == "Add Next Backlogs":
             upd_user(uid, {"step": "mentor_backlog_ready"})
             await update.message.reply_text("Ready to add another backlog?", reply_markup=ReplyKeyboardMarkup([["Yes", "No"], ["Back"]], resize_keyboard=True))
-        elif text == "Generate AI Plan (Daily)" or text == "Switch to Daily Planner":
+        elif text == "Generate AI Plan (Daily)":
             upd_user(uid, {"step": "mentor_planner_date"})
             await update.message.reply_text("📅 *Daily Study Planner*\n\nEnter date for class? (Format: DD/MM/YYYY)", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True), parse_mode="Markdown")
+        elif text == "Switch to Daily Planner":
+            upd_user(uid, {"step": "mentor_planner_ready"})
+            await update.message.reply_text(
+                "📅 *DAILY STUDY PLANNER*\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "Planner section mein aapka swagat hai! 👋\n\n"
+                "Niche diye gaye options mein se chunein:",
+                reply_markup=ReplyKeyboardMarkup(TAB2_PLANNER_OPTS_KB, resize_keyboard=True),
+                parse_mode="Markdown"
+            )
         elif text == "Back One Step":
             upd_user(uid, {"step": "mentor_backlog_start"})
             await update.message.reply_text("Backlog aaj se start karna hai ya next day se?", reply_markup=ReplyKeyboardMarkup(BACKLOG_START_OPTIONS, resize_keyboard=True))
