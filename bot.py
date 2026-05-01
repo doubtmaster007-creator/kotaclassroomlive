@@ -109,8 +109,9 @@ BACKLOGS_MENU = [["Check Backlogs", "Add Backlogs"], ["Back", "Ask Doubt"]]
 
 # Integrated Two-Tab Mentorship UI
 MENTORSHIP_TABS_KB = [
-    ["Backlogs", "Daily Planner"],
-    ["Show My Self-Study Planner", "Ask Doubt"]
+    ["Ask Doubt", "Backlogs"],
+    ["Daily Planner", "Daily Scheduler"],
+    ["Show My Self-Study Planner"]
 ]
 
 TAB1_BACKLOG_OPTS_KB = [
@@ -4555,10 +4556,11 @@ async def mentorship(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"📦 *Batch:* {batch}\n\n"
                     "━━━━━━━━━━━━━━━━━━━━\n\n"
                     "Select a Tab to manage your preparation:\n\n"
-                    "📚 *Backlogs Coverage* — Purane topics cover karein\n"
-                    "📅 *Daily Study Planner* — Naya plan generate karein\n"
-                    "📋 *Show My Planner* — Aaj ke tasks dekhein\n\n"
-                    "💡 *Tip:* Type `done [ID]` (e.g. `done ab12`) to mark tasks as finished!"
+                    "❓ *Ask Doubt* — Post your questions\n"
+                    "📚 *Backlogs Coverage* — Cover old topics\n"
+                    "📅 *Daily Study Planner* — AI-generated schedule\n"
+                    "📝 *Daily Scheduler* — Manual sequential plan\n"
+                    "📋 *Show My Planner* — Check today's tasks"
                 )
                 
                 await update.message.reply_text(
@@ -4992,7 +4994,10 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         return True
 
     if step == "mentor_tab_selection":
-        if text == "Backlogs":
+        elif text == "Ask Doubt":
+            upd_user(uid, {"step": "subject"})
+            await update.message.reply_text("Select Subject:", reply_markup=ReplyKeyboardMarkup(SUBJECT_OPTIONS, resize_keyboard=True))
+        elif text == "Backlogs":
             upd_user(uid, {"step": "mentor_backlog_ready"})
             await update.message.reply_text(
                 "📚 *BACKLOGS COVERAGE*\n"
@@ -5000,6 +5005,15 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
                 "Purane pending topics ko systematically cover karne ke liye ready hain? ✨\n\n"
                 "Kya aap abhi koi backlog add karna chahte hain?", 
                 reply_markup=ReplyKeyboardMarkup([["Yes", "No"], ["Back"]], resize_keyboard=True), 
+                parse_mode="Markdown"
+            )
+        elif text == "Daily Scheduler":
+            upd_user(uid, {"step": "mentor_scheduler_date"})
+            await update.message.reply_text(
+                "📝 *DAILY SCHEDULER (Manual)*\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "Manual plan banane ke liye date enter karein (DD/MM/YYYY):", 
+                reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True), 
                 parse_mode="Markdown"
             )
         elif text == "Show My Self-Study Planner":
@@ -5292,8 +5306,99 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
             )
         return True
 
-    # TAB 2: DAILY PLANNER FLOW
-    if step == "mentor_planner_date":
+    # --- DAILY SCHEDULER (MANUAL) FLOW ---
+    if step == "mentor_scheduler_date":
+        if text == "Back": await mentorship(update, context); return True
+        try:
+            target_dt = datetime.strptime(text, "%d/%m/%Y").date()
+            temp.setdefault("scheduler_data", {})["date"] = text
+            save_mentorship_temp(uid, temp)
+            upd_user(uid, {"step": "mentor_scheduler_timetable"})
+            await update.message.reply_text(
+                "Enter class start time with AM/PM (Subject - Time)\n\nExample:\nBiology - 09:00 AM\nChemistry - 11:30 AM",
+                reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True)
+            )
+        except:
+            await update.message.reply_text("❌ Invalid format. Use DD/MM/YYYY.")
+        return True
+
+    if step == "mentor_scheduler_timetable":
+        if text == "Back": upd_user(uid, {"step": "mentor_scheduler_date"}); return True
+        classes = []
+        for line in text.split("\n"):
+            if "-" in line:
+                sub, tm = line.split("-", 1)
+                classes.append({"subject": sub.strip(), "time": tm.strip()})
+        
+        if not classes:
+            await update.message.reply_text("❌ Sahi format mein classes enter karein (e.g. Physics - 10:00 AM)")
+            return True
+        
+        temp["scheduler_data"]["classes"] = classes
+        temp["scheduler_data"]["current_index"] = 0
+        temp["scheduler_data"]["tasks_to_save"] = []
+        save_mentorship_temp(uid, temp)
+        
+        first_sub = classes[0]["subject"]
+        upd_user(uid, {"step": "mentor_scheduler_plan"})
+        await update.message.reply_text(f"📝 *Subject:* {first_sub}\n\nIss subject ke liye aapka aaj ka plan kya hai?", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True))
+        return True
+
+    if step == "mentor_scheduler_plan":
+        if text == "Back": upd_user(uid, {"step": "mentor_scheduler_timetable"}); return True
+        idx = temp["scheduler_data"]["current_index"]
+        classes = temp["scheduler_data"]["classes"]
+        
+        # Save plan
+        temp["scheduler_data"]["last_plan"] = text
+        save_mentorship_temp(uid, temp)
+        
+        upd_user(uid, {"step": "mentor_scheduler_material"})
+        await update.message.reply_text(f"📚 Iss class ke liye kaunsa material required hai?", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True))
+        return True
+
+    if step == "mentor_scheduler_material":
+        if text == "Back": upd_user(uid, {"step": "mentor_scheduler_plan"}); return True
+        idx = temp["scheduler_data"]["current_index"]
+        classes = temp["scheduler_data"]["classes"]
+        current_class = classes[idx]
+        
+        # Add to tasks to save
+        temp["scheduler_data"]["tasks_to_save"].append({
+            "subject": current_class["subject"],
+            "topic": f"Plan: {temp['scheduler_data']['last_plan']} | Material: {text}",
+            "type": "CLASS",
+            "time": current_class["time"]
+        })
+        
+        idx += 1
+        temp["scheduler_data"]["current_index"] = idx
+        
+        if idx < len(classes):
+            next_sub = classes[idx]["subject"]
+            save_mentorship_temp(uid, temp)
+            upd_user(uid, {"step": "mentor_scheduler_plan"})
+            await update.message.reply_text(f"📝 *Subject:* {next_sub}\n\nIss subject ke liye aapka aaj ka plan kya hai?", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True))
+        else:
+            # Finish Scheduler
+            target_date = datetime.strptime(temp["scheduler_data"]["date"], "%d/%m/%Y").date()
+            log = get_or_create_daily_log(student["id"], target_date)
+            for t in temp["scheduler_data"]["tasks_to_save"]:
+                create_task({
+                    "student_id": student["id"],
+                    "daily_log_id": log["id"],
+                    "type": t["type"],
+                    "subject": t["subject"],
+                    "topic": t["topic"],
+                    "scheduled_date": target_date,
+                    "status": "pending"
+                })
+            
+            await update.message.reply_text("✅ *Manual Plan Ready!*\n\nAapka scheduler update kar diya gaya hai. Best of luck! 👍", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_TABS_KB, resize_keyboard=True), parse_mode="Markdown")
+            upd_user(uid, {"step": "mentor_tab_selection"})
+            temp.pop("scheduler_data", None)
+            save_mentorship_temp(uid, temp)
+        return True
         if text == "Back":
             await mentorship(update, context)
             return True
