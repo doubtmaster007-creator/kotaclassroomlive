@@ -3001,27 +3001,30 @@ async def handle_parent_steps(update: Update, context: ContextTypes.DEFAULT_TYPE
     if step.startswith("parent_agreement_"):
         student_uid = int(step.split("_")[2])
         if text.lower() == "yes":
-            # Generate Pairing Code now and send to group
-            pairing_code = str(random.randint(100000, 999999))
-            update_student_by_telegram(student_uid, {"parent_pairing_code": pairing_code})
+            lang = user.get("parent_lang_tmp", "English")
+            # Complete verification immediately upon "Yes"
+            update_student_by_telegram(student_uid, {
+                "parent_telegram_id": str(uid),
+                "parent_language": lang,
+                "parent_verified": True
+            })
             
-            student = get_student_by_telegram(student_uid)
-            await context.bot.send_message(
-                chat_id=MENTORSHIP_GROUP_ID,
-                text=(
-                    "🛡️ *Parent Pairing Code Generated*\n\n"
-                    f"Student: {student.get('name')}\n"
-                    f"Pairing Code: `{pairing_code}`\n\n"
-                    "Please provide this code to the student/parent to complete verification."
-                ),
-                parse_mode="Markdown"
-            )
-            
-            upd_user(uid, {"step": f"parent_pairing_{student_uid}"})
+            upd_user(uid, {"step": "ready_for_new_doubt"})
             await update.message.reply_text(
-                "Bahut badhiya! Ab pairing code yahan paste karein (ye code aapke bache ke mentor ke paas bhej diya gaya hai):",
-                reply_markup=ReplyKeyboardRemove()
+                f"✅ *Verification Successful!*\n\nAb aapko {lang} mein apne bache ki regular daily reports aur summaries milti rahengi. ✨", 
+                parse_mode="Markdown",
+                reply_markup=ReplyKeyboardMarkup([["My Mentorship"], ["Ask Doubt"]], resize_keyboard=True)
             )
+            
+            # Notify student
+            try:
+                await context.bot.send_message(
+                    chat_id=student_uid, 
+                    text="✅ *Parent Verified!*\n\nAapke parent ne verification complete kar diya hai. Ab aapka Mentorship Dashboard fully active hai! 🚀",
+                    parse_mode="Markdown",
+                    reply_markup=ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True)
+                )
+            except: pass
         else:
             upd_user(uid, {"step": "ready_for_new_doubt"})
             await update.message.reply_text("Registration cancel kar di gayi hai.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
@@ -4075,6 +4078,15 @@ async def send_daily_planner_summary(bot, student: Dict[str, Any], date_val: dat
     
     try:
         await bot.send_message(chat_id=int(student["telegram_id"]), text=msg, parse_mode="Markdown")
+        
+        # Send copy to parent if verified
+        if student.get("parent_telegram_id") and student.get("parent_verified"):
+            try:
+                child_name = student.get("name", "Student")
+                parent_msg = f"🛡️ *PARENT REPORT* ({child_name})\n━━━━━━━━━━━━━━━━━━━━\n\n{msg}"
+                await bot.send_message(chat_id=int(student["parent_telegram_id"]), text=parent_msg, parse_mode="Markdown")
+            except Exception as pe:
+                logger.error(f"Failed to send summary to parent of {student['id']}: {pe}")
     except Exception as e:
         logger.error(f"Failed to send daily summary to {student['id']}: {e}")
 
@@ -4677,14 +4689,28 @@ async def accept_student(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sid = student["telegram_id"]
     if sid:
         sid_int = int(sid)
+        bot_username = (await context.bot.get_me()).username
+        parent_link = f"https://t.me/{bot_username}?start=parent_{sid}"
+        
         upd_user(sid_int, {"mentorship_mode": "approved", "mentorship_student_id": str(student["id"]), "step": "ready_for_new_doubt"})
+        
+        approval_msg = (
+            "🎊 *CONGRATULATIONS!*\n\n"
+            "Aapka Mentorship application approve ho gaya hai! ✅\n\n"
+            "🛡️ *Next Step: Parent Verification*\n"
+            "Reports aur monitoring ke liye aapke parent ka verification zaroori hai. "
+            "Niche diye gaye link ko apne parent ko forward karein aur unse verification complete karne ko kahein:\n\n"
+            f"🔗 {parent_link}\n\n"
+            "Parent verification ke baad aapka dashboard fully active ho jayega. ✨"
+        )
+        
         await context.bot.send_message(
             chat_id=sid_int, 
-            text="🎊 *CONGRATULATIONS!*\n\nAapka Mentorship application approve ho gaya hai.\n\nAb aap **'My Personal Mentor'** par click karke apna Backlog aur Daily Planner manage kar sakte hain! 🚀",
+            text=approval_msg,
             parse_mode="Markdown",
             reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True)
         )
-    await update.message.reply_text(f"Student {student['name']} approved successfully.")
+    await update.message.reply_text(f"Student {student['name']} approved successfully. Parent link sent to student.")
 
 async def mentorreply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.message.from_user.id
