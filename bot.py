@@ -4994,7 +4994,7 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         return True
 
     if step == "mentor_tab_selection":
-        elif text == "Ask Doubt":
+        if text == "Ask Doubt":
             upd_user(uid, {"step": "subject"})
             await update.message.reply_text("Select Subject:", reply_markup=ReplyKeyboardMarkup(SUBJECT_OPTIONS, resize_keyboard=True))
         elif text == "Backlogs":
