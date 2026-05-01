@@ -2318,6 +2318,21 @@ def get_weekday_timetable(student_id: str, day_name: str) -> Optional[Dict[str, 
     data["free_slots"] = data["free_slots"] if isinstance(data["free_slots"], list) else safe_json_loads(data.get("free_slots") or "[]", [])
     return data
 
+def init_db_schema():
+    """Ensure database schema is up-to-date with necessary columns."""
+    c = db(); cur = c.cursor()
+    try:
+        cur.execute("ALTER TABLE daily_logs ADD COLUMN IF NOT EXISTS nudge_1_sent BOOLEAN DEFAULT FALSE;")
+        cur.execute("ALTER TABLE daily_logs ADD COLUMN IF NOT EXISTS nudge_2_sent BOOLEAN DEFAULT FALSE;")
+        cur.execute("ALTER TABLE daily_logs ADD COLUMN IF NOT EXISTS nudge_3_sent BOOLEAN DEFAULT FALSE;")
+        cur.execute("ALTER TABLE daily_logs ADD COLUMN IF NOT EXISTS summary_sent BOOLEAN DEFAULT FALSE;")
+        c.commit()
+    except Exception as e:
+        logger.error(f"Schema update failed: {e}")
+        c.rollback()
+    finally:
+        c.close()
+
 def get_or_create_daily_log(student_id: str, date_value) -> Dict[str, Any]:
     c = db(); cur = db_cursor(c)
     cur.execute("SELECT * FROM daily_logs WHERE student_id=%s AND date=%s", (student_id, date_value))
@@ -3615,11 +3630,17 @@ async def run_mentorship_cycle(bot):
     today = today_ist_date()
     c = db(); cur = db_cursor(c)
     three_days_ago = today - timedelta(days=3)
-    cur.execute("SELECT id, student_id FROM tasks WHERE status='pending' AND scheduled_date < %s", (three_days_ago,))
+    # Corrected rollover logic: Fetch tasks first to create proper backlog entries
+    cur.execute("SELECT * FROM tasks WHERE status='pending' AND scheduled_date < %s", (three_days_ago,))
     old_tasks = cur.fetchall()
     for t in old_tasks:
-        cur.execute("INSERT INTO backlogs (student_id, task_id, original_date, created_at) VALUES (%s, %s, %s, now())", (t["student_id"], t["id"], three_days_ago))
-        cur.execute("UPDATE tasks SET status='backlog' WHERE id=%s", (t["id"]) if isinstance(t["id"], int) else (t["id"],))
+        # Move to backlogs table
+        cur.execute("""
+            INSERT INTO backlogs (student_id, subject, topic, description, source, priority, status, added_by, created_at)
+            VALUES (%s, %s, %s, %s, 'ROLLOVER', %s, 'pending', 'system', now())
+        """, (t["student_id"], t["subject"], t["topic"], t["description"], t["priority"]))
+        # Mark task as rollovered
+        cur.execute("UPDATE tasks SET status='backlog' WHERE id=%s", (t["id"],))
     c.commit(); c.close()
 
     # 2. 48-Hour Parent Verification Timeout
@@ -3635,12 +3656,67 @@ async def run_mentorship_cycle(bot):
         except: pass
     c.commit(); c.close()
 
-    # 3. Existing Mentorship Logic (Reminders, Reports, etc.)
+    # 3. Relative Progress Nudges & Night Summary
+    now_ist = datetime.now(IST)
+    
+    # 4. Existing Mentorship Logic (Reminders, Reports, etc.)
     for student in active_students():
         try:
+            log = get_or_create_daily_log(student["id"], today)
+            created_at = log.get("created_at")
+            
+            if created_at:
+                # Handle both string and datetime types
+                if isinstance(created_at, str):
+                    try:
+                        created_at = datetime.fromisoformat(created_at)
+                    except:
+                        created_at = None
+                
+                if created_at:
+                    # Convert created_at to IST for comparison
+                    if created_at.tzinfo is None:
+                        created_ist = IST.localize(created_at)
+                    else:
+                        created_ist = created_at.astimezone(IST)
+                    
+                    diff_hours = (now_ist - created_ist).total_seconds() / 3600
+                    
+                    # Nudge 1: after 2 hr
+                    if 2 <= diff_hours < 4 and not log.get("nudge_1_sent"):
+                        await bot.send_message(
+                            chat_id=int(student["telegram_id"]),
+                            text="👋 *2-Hour Progress Check!*\n\nAaj ke planner tasks ka kya status hai? Jo complete ho gaye hain unhe mark kar dijiye! 💪\n\nType `Show My Self-Study Planner` to see your list.",
+                            parse_mode="Markdown"
+                        )
+                        update_daily_log(log["id"], {"nudge_1_sent": True})
+                    
+                    # Nudge 2: after 4 hr
+                    elif 4 <= diff_hours < 6 and not log.get("nudge_2_sent"):
+                        await bot.send_message(
+                            chat_id=int(student["telegram_id"]),
+                            text="🔔 *4-Hour Reminder!*\n\nAdha din nikal gaya hai! Apne planner ko check karein aur completed tasks update karein. 📋",
+                            parse_mode="Markdown"
+                        )
+                        update_daily_log(log["id"], {"nudge_2_sent": True})
+                    
+                    # Nudge 3: after 6 hr
+                    elif 6 <= diff_hours < 7 and not log.get("nudge_3_sent"):
+                        await bot.send_message(
+                            chat_id=int(student["telegram_id"]),
+                            text="🚀 *6-Hour Final Nudge!*\n\nAlmost there! Aaj ke bache hue tasks finish karein. ✨\n\nType `Show My Self-Study Planner` to see remaining work.",
+                            parse_mode="Markdown"
+                        )
+                        update_daily_log(log["id"], {"nudge_3_sent": True})
+                    
+                    # Night Summary: 1 hr later of last nudge (after 7 hr)
+                    elif diff_hours >= 7 and not log.get("summary_sent"):
+                        await send_daily_planner_summary(bot, student, today)
+                        update_daily_log(log["id"], {"summary_sent": True})
+
             await process_backlog_delivery(bot, student)
         except Exception as e:
-            logger.error(f"Backlog delivery error for student {student.get('id')}: {e}")
+            logger.error(f"Mentorship cycle error for student {student.get('id')}: {e}")
 
 async def mentorship_scheduler_loop(bot):
     while True:
@@ -3952,6 +4028,36 @@ async def send_backlog_day_plan(bot, student: Dict[str, Any], backlog: Dict[str,
         text="Need help completing this task?\n\nChoose an option below:",
         reply_markup=ReplyKeyboardMarkup(BACKLOG_HELP_OPTIONS, resize_keyboard=True)
     )
+
+async def send_daily_planner_summary(bot, student: Dict[str, Any], date_val: date):
+    tasks = get_student_tasks(student["id"], scheduled_date=date_val)
+    if not tasks:
+        return
+    
+    completed = [t for t in tasks if t["status"] == "done"]
+    pending = [t for t in tasks if t["status"] == "pending"]
+    total = len(tasks)
+    
+    if total == 0: return
+
+    msg = f"📋 *Daily Progress Summary ({date_val.strftime('%d/%m/%Y')})*\n━━━━━━━━━━━━━━━━━━\n\n"
+    msg += f"✅ *Completed:* {len(completed)}/{total}\n"
+    msg += f"⏳ *Pending:* {len(pending)}/{total}\n\n"
+    
+    if pending:
+        msg += "*Pending Tasks:*\n"
+        for t in pending:
+            # Use first 4 chars of UUID as a short ID for the student
+            short_id = str(t["id"])[:4]
+            msg += f"• `{short_id}`: {t.get('subject')} - {t.get('topic')}\n"
+        msg += "\nMark done by typing: `done [ID]` (e.g., `done ab12`)"
+    else:
+        msg += "🎉 *Congratulations!* Aapne aaj ke saare tasks complete kar liye hain. Bohot badhiya! 🚀"
+    
+    try:
+        await bot.send_message(chat_id=int(student["telegram_id"]), text=msg, parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"Failed to send daily summary to {student['id']}: {e}")
 
 async def process_backlog_delivery(bot, student: Dict[str, Any]):
     now_dt = today_ist()
@@ -5106,7 +5212,23 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         if text == "Generate My Daily Plan":
             await start_sequential_hw_flow(update, context, student)
         elif text == "Show My Self-Study Planner":
-            await update.message.reply_text("Listing all previous plans... (Feature Integration Pending)")
+            tasks = get_student_tasks(student["id"], scheduled_date=today_ist_date())
+            if not tasks:
+                await update.message.reply_text("Aapka aaj ka koi plan nahi mil raha. Naya plan generate karein?", reply_markup=ReplyKeyboardMarkup([["Generate My Daily Plan"], ["Back"]], resize_keyboard=True))
+            else:
+                msg = f"📋 *Today's Planner ({today_ist_date().strftime('%d/%m/%Y')})*\n━━━━━━━━━━━━━━━━━━\n\n"
+                emoji_map = {"HW": "📝", "REVISION": "📖", "BACKLOG": "🔁", "PENDING": "⏳", "OTHER": "📌"}
+                
+                for t in tasks:
+                    status_emoji = "✅" if t["status"] == "done" else "⏳"
+                    type_emoji = emoji_map.get(t["type"], "📝")
+                    short_id = str(t["id"])[:4]
+                    msg += f"{status_emoji} {type_emoji} `{short_id}`: *{t['subject']}* - {t['topic']}\n"
+                
+                msg += "\n💡 *Tip:* Mark done using `done [ID]` (e.g., `done ab12`)\n"
+                msg += "Skip task using `skip [ID]`"
+                
+                await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=ReplyKeyboardMarkup(TAB2_PLANNER_OPTS_KB, resize_keyboard=True))
         elif text == "Switch to Backlogs":
             upd_user(uid, {"step": "mentor_backlog_ready"})
             await update.message.reply_text("Ready to add backlog?", reply_markup=ReplyKeyboardMarkup([["Yes", "No"], ["Back"]], resize_keyboard=True))
@@ -7855,6 +7977,7 @@ def main():
     print("✅ Flask thread started")
 
     init_db()
+    init_db_schema()
     setup_launch_content()
     app = ApplicationBuilder().token(BOT_TOKEN).post_init(post_init).build()
     non_command_messages = filters.PHOTO | filters.CONTACT | (filters.TEXT & ~filters.COMMAND)
