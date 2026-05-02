@@ -3227,67 +3227,60 @@ def get_system_prompt(subject: str, stream: str = "", chapter: str = "", goal: s
     extra = SUBJECT_PROMPTS.get(subject, "")
     return f"{COMMON_PROMPT}\n\n{extra}".strip()
 
-async def anthropic_text(prompt: str, system_prompt: str = None, model: str = None) -> str:
+def anthropic_text(prompt: str, system_prompt: str = None, model: str = None) -> str:
     if system_prompt is None:
         system_prompt = COMMON_PROMPT
     if model is None:
         model = MODEL_SONNET
     
-    # Run synchronous Anthropic call in a separate thread to avoid blocking event loop
-    def _call():
-        msg = client.messages.create(
-            model=model,
-            max_tokens=4000,
-            system=system_prompt,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        return "".join(block.text for block in msg.content if getattr(block, "type", "") == "text")
-    
-    return await asyncio.to_thread(_call)
+    msg = client.messages.create(
+        model=model,
+        max_tokens=4000,
+        system=system_prompt,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return "".join(block.text for block in msg.content if getattr(block, "type", "") == "text")
 
-async def anthropic_with_image(prompt: str, image_b64: str, media_type: str = "image/jpeg", system_prompt: str = None, model: str = None) -> str:
+def anthropic_with_image(prompt: str, image_b64: str, media_type: str = "image/jpeg", system_prompt: str = None, model: str = None) -> str:
     if system_prompt is None:
         system_prompt = COMMON_PROMPT
     if model is None:
         model = MODEL_SONNET
     
-    def _call():
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                msg = client.messages.create(
-                    model=model,
-                    max_tokens=4000,
-                    system=system_prompt,
-                    messages=[{
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": media_type,
-                                    "data": image_b64
-                                }
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            msg = client.messages.create(
+                model=model,
+                max_tokens=4000,
+                system=system_prompt,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": media_type,
+                                "data": image_b64
                             }
-                        ]
-                    }],
-                    timeout=60
-                )
-                return "".join(block.text for block in msg.content if getattr(block, "type", "") == "text")
-            except Exception as e:
-                logger.error(f"Anthropic API Error (Attempt {attempt+1}/{max_retries}): {e}")
-                if attempt == max_retries - 1:
-                    raise e
-        return ""
-    
-    return await asyncio.to_thread(_call)
+                        }
+                    ]
+                }],
+                timeout=60
+            )
+            return "".join(block.text for block in msg.content if getattr(block, "type", "") == "text")
+        except Exception as e:
+            logger.error(f"Anthropic API Error (Attempt {attempt+1}/{max_retries}): {e}")
+            if attempt == max_retries - 1:
+                raise e
+    return ""
 
-async def call_json_prompt(prompt_template: str, payload: Dict[str, Any], model: str = None) -> Dict[str, Any]:
+def call_json_prompt(prompt_template: str, payload: Dict[str, Any], model: str = None) -> Dict[str, Any]:
     prompt = prompt_template.strip() + "\n\nInput Data:\n" + json.dumps(payload, ensure_ascii=True)
-    raw = await anthropic_text(prompt, system_prompt="Return valid JSON only.", model=model or PLANNER_MODEL)
-    raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+    raw = anthropic_text(prompt, system_prompt="Return valid JSON only.", model=model or PLANNER_MODEL).strip()
+    raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
     try:
         return json.loads(raw)
     except Exception:
@@ -4351,7 +4344,7 @@ async def start_next_task(bot, student_id):
     except: pass
     return True
 
-async def handle_mentorship_callbacks(update: Update, context: ContextTypes.DEFAULT_HANDLER):
+async def handle_mentorship_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
     uid = query.from_user.id
@@ -4466,7 +4459,7 @@ async def send_weekly_mentorship_summary(bot, student_id):
         parent_lang = student.get("parent_preferred_language", "Hindi")
         try:
             translation_prompt = f"Translate this student progress report to {parent_lang}. Keep it encouraging for the parent. Report:\n{msg}"
-            translated_msg = await anthropic_text(translation_prompt)
+            translated_msg = await asyncio.to_thread(anthropic_text, translation_prompt)
             await bot.send_message(chat_id=int(parent_id), text=f"👨‍👩‍👧‍👦 <b>Weekly Report (Translated):</b>\n\n{translated_msg}", parse_mode="HTML")
         except Exception as te:
             logger.error(f"Weekly translation failed: {te}")
@@ -4475,7 +4468,7 @@ async def send_weekly_mentorship_summary(bot, student_id):
     
     c.close()
 
-async def handle_view_backlogs(update: Update, context: ContextTypes.DEFAULT_HANDLER):
+async def handle_view_backlogs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     student = get_student_by_telegram(uid)
     if not student: return
