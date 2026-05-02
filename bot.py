@@ -1975,6 +1975,14 @@ def init_db():
         except:
             conn.rollback()
         
+        ensure_column_pg(conn, "students", "mentor_id", "TEXT")
+        # Ensure mentor_id is TEXT (migration if it was UUID)
+        try:
+            c.execute("ALTER TABLE students ALTER COLUMN mentor_id TYPE TEXT")
+            conn.commit()
+        except:
+            conn.rollback()
+            
         ensure_column_pg(conn, "students", "mentor_id_telegram", "TEXT")
         ensure_column_pg(conn, "students", "phone_verified", "BOOLEAN DEFAULT false")
         ensure_column_pg(conn, "students", "parent_verified", "BOOLEAN DEFAULT false")
