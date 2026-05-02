@@ -4217,10 +4217,9 @@ async def send_backlog_day_plan(bot, student: Dict[str, Any], backlog: Dict[str,
         text=f"{prefix}\n\n" + "\n".join(lines) + f"\n\nTotal load: {total_minutes} min",
         reply_markup=ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True)
     )
-    u = get_user(int(student["telegram_id"]))
-    if u:
-        temp = get_mentorship_temp(u)
- async def send_daily_planner_summary(bot, student: Dict[str, Any], date_val: date):
+    return True
+
+async def send_daily_planner_summary(bot, student: Dict[str, Any], date_val: date):
     tasks = get_student_tasks(student["id"], scheduled_date=date_val)
     if not tasks: return
     
