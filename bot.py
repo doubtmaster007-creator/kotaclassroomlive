@@ -3758,95 +3758,95 @@ async def run_mentorship_cycle(bot):
 
     # 4. General Mentorship Cycle (Reminders + Timers)
     for student in active_students():
-        log = get_or_create_daily_log(student["id"], today)
-        day_name = now_ist.strftime("%A")
-        
-        c_inner = db(); cur_inner = db_cursor(c_inner)
-        cur_inner.execute("SELECT coaching_slots FROM weekly_timetable WHERE student_id=%s AND day_of_week=%s", (student["id"], day_name))
-        tt_row = cur_inner.fetchone()
-        
-        if tt_row and tt_row["coaching_slots"]:
-            slots = json.loads(tt_row["coaching_slots"]) if isinstance(tt_row["coaching_slots"], str) else tt_row["coaching_slots"]
-            if slots:
-                times = []
-                for s in slots:
-                    try:
-                        t_str = s.get("start_time", s.get("time"))
-                        t_dt = datetime.strptime(t_str, "%I:%M %p").time()
-                        times.append(t_dt)
-                    except: continue
-                
-                if times:
-                    first_class = min(times)
-                    last_class = max(times)
-                    
-                    # Morning Reminder (20 mins before first class)
-                    first_dt = IST.localize(datetime.combine(today, first_class))
-                    diff_pre = (first_dt - now_ist).total_seconds() / 60
-                    if 15 <= diff_pre <= 25 and not log.get("morning_reminder_sent"):
-                        classes_text = "\n".join([f"• {s.get('subject')}: {s.get('start_time', s.get('time'))}" for s in slots])
-                        await bot.send_message(chat_id=int(student["telegram_id"]), text=f"☀️ <b>Good Morning!</b>\n\nAapki coaching classes shuru hone wali hain:\n\n{classes_text}\n\nBest of luck! 🚀", parse_mode="HTML")
-                        update_daily_log(log["id"], {"morning_reminder_sent": True})
-                    
-                    # Post-Coaching Trigger (30 mins after last class ends - assume 90m per class)
-                    est_end = IST.localize(datetime.combine(today, last_class) + timedelta(minutes=90))
-                    diff_post = (now_ist - est_end).total_seconds() / 60
-                    if 30 <= diff_post <= 60 and not log.get("scheduler_prompt_sent"):
-                        cur_inner.execute("SELECT count(*) FROM tasks WHERE student_id=%s AND scheduled_date=%s", (student["id"], today))
-                        if cur_inner.fetchone()[0] == 0:
-                            await bot.send_message(chat_id=int(student["telegram_id"]), text="🏠 <b>Coaching Over!</b>\n\nAb time hai aaj ka plan banane ka. 'Daily Scheduler' dabayein. ✨", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True), parse_mode="HTML")
-                            update_daily_log(log["id"], {"scheduler_prompt_sent": True})
-
-        # 5. Live Task Timer Updates
-        cur_inner.execute("SELECT * FROM tasks WHERE student_id=%s AND status='in_progress' AND scheduled_date=%s", (student["id"], today))
-        active_tasks = cur_inner.fetchall()
-        for t in active_tasks:
-            if t.get("is_paused"):
-                p_at = t["paused_at"]
-                if p_at:
-                    if p_at.tzinfo is None: p_at = IST.localize(p_at)
-                    if (now_ist - p_at).total_seconds() / 60 >= 10:
-                        cur_inner.execute("UPDATE tasks SET is_paused=false, updated_at=now() WHERE id=%s", (t["id"],))
-                        await bot.send_message(chat_id=int(student["telegram_id"]), text=f"⏰ 10 minute break over! <b>{t['subject']}</b> task resume ho raha hai.", parse_mode="HTML")
-                continue
+        try:
+            log = get_or_create_daily_log(student["id"], today)
+            day_name = now_ist.strftime("%A")
+            c_inner = db(); cur_inner = db_cursor(c_inner)
+            cur_inner.execute("SELECT coaching_slots FROM weekly_timetable WHERE student_id=%s AND day_of_week=%s", (student["id"], day_name))
+            tt_row = cur_inner.fetchone()
             
-            est_end = t["estimated_end_time"]
-            if est_end:
-                if est_end.tzinfo is None: est_end = IST.localize(est_end)
-                rem = int((est_end - now_ist).total_seconds() / 60)
-                if rem <= 0:
-                    cur_inner.execute("UPDATE tasks SET status='awaiting_status', updated_at=now() WHERE id=%s", (t["id"],))
-                    await bot.send_message(chat_id=int(student["telegram_id"]), text=f"🔔 <b>Time's up for:</b> {t['subject']}\n\nKya aapne ye poora kar liya?", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Yes, Done", callback_data=f"m_done_{t['id']}")],[InlineKeyboardButton("⏳ No, Extend 15m", callback_data=f"m_ext_{t['id']}")] ]), parse_mode="HTML")
-                    try: await bot.unpin_chat_message(chat_id=int(student["telegram_id"]), message_id=t["timer_message_id"])
-                    except: pass
-                else:
-                    try:
-                        kb = [[InlineKeyboardButton("✅ Done Early", callback_data=f"m_done_{t['id']}")], [InlineKeyboardButton("⏸ Pause (10m)", callback_data=f"m_pause_{t['id']}"), InlineKeyboardButton("⏳ Extend (15m)", callback_data=f"m_ext_{t['id']}")] ]
-                        msg_text = f"🚀 <b>TASK IN PROGRESS</b>\n━━━━━━━━━━━━━━━━━━━━\n\n📖 <b>Subject:</b> {t['subject']}\n📝 <b>Task:</b> {t['description']}\n\n⏱ <b>Time Remaining:</b> {rem} mins\n🏁 <b>Target End:</b> {est_end.strftime('%I:%M %p')}"
-                        await bot.edit_message_text(chat_id=int(student["telegram_id"]), message_id=t["timer_message_id"], text=msg_text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
-                    except: pass
-        
-        # 6. Existing Nudge Logic
-        created_at = log.get("created_at")
-        if created_at:
-            if isinstance(created_at, str):
-                try: created_at = datetime.fromisoformat(created_at)
-                except: created_at = None
+            if tt_row and tt_row["coaching_slots"]:
+                slots = json.loads(tt_row["coaching_slots"]) if isinstance(tt_row["coaching_slots"], str) else tt_row["coaching_slots"]
+                if slots:
+                    times = []
+                    for s in slots:
+                        try:
+                            t_str = s.get("start_time", s.get("time"))
+                            t_dt = datetime.strptime(t_str, "%I:%M %p").time()
+                            times.append(t_dt)
+                        except: continue
+                    
+                    if times:
+                        first_class = min(times)
+                        last_class = max(times)
+                        
+                        # Morning Reminder (20 mins before first class)
+                        first_dt = IST.localize(datetime.combine(today, first_class))
+                        diff_pre = (first_dt - now_ist).total_seconds() / 60
+                        if 15 <= diff_pre <= 25 and not log.get("morning_reminder_sent"):
+                            classes_text = "\n".join([f"• {s.get('subject')}: {s.get('start_time', s.get('time'))}" for s in slots])
+                            await bot.send_message(chat_id=int(student["telegram_id"]), text=f"☀️ <b>Good Morning!</b>\n\nAapki coaching classes shuru hone wali hain:\n\n{classes_text}\n\nBest of luck! 🚀", parse_mode="HTML")
+                            update_daily_log(log["id"], {"morning_reminder_sent": True})
+                        
+                        # Post-Coaching Trigger (30 mins after last class ends - assume 90m per class)
+                        est_end = IST.localize(datetime.combine(today, last_class) + timedelta(minutes=90))
+                        diff_post = (now_ist - est_end).total_seconds() / 60
+                        if 30 <= diff_post <= 60 and not log.get("scheduler_prompt_sent"):
+                            cur_inner.execute("SELECT count(*) FROM tasks WHERE student_id=%s AND scheduled_date=%s", (student["id"], today))
+                            if cur_inner.fetchone()[0] == 0:
+                                await bot.send_message(chat_id=int(student["telegram_id"]), text="🏠 <b>Coaching Over!</b>\n\nAb time hai aaj ka plan banane ka. 'Daily Scheduler' dabayein. ✨", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True), parse_mode="HTML")
+                                update_daily_log(log["id"], {"scheduler_prompt_sent": True})
+
+            # 5. Live Task Timer Updates
+            cur_inner.execute("SELECT * FROM tasks WHERE student_id=%s AND status='in_progress' AND scheduled_date=%s", (student["id"], today))
+            active_tasks = cur_inner.fetchall()
+            for t in active_tasks:
+                if t.get("is_paused"):
+                    p_at = t["paused_at"]
+                    if p_at:
+                        if p_at.tzinfo is None: p_at = IST.localize(p_at)
+                        if (now_ist - p_at).total_seconds() / 60 >= 10:
+                            cur_inner.execute("UPDATE tasks SET is_paused=false, updated_at=now() WHERE id=%s", (t["id"],))
+                            await bot.send_message(chat_id=int(student["telegram_id"]), text=f"⏰ 10 minute break over! <b>{t['subject']}</b> task resume ho raha hai.", parse_mode="HTML")
+                    continue
+                
+                est_end = t["estimated_end_time"]
+                if est_end:
+                    if est_end.tzinfo is None: est_end = IST.localize(est_end)
+                    rem = int((est_end - now_ist).total_seconds() / 60)
+                    if rem <= 0:
+                        cur_inner.execute("UPDATE tasks SET status='awaiting_status', updated_at=now() WHERE id=%s", (t["id"],))
+                        await bot.send_message(chat_id=int(student["telegram_id"]), text=f"🔔 <b>Time's up for:</b> {t['subject']}\n\nKya aapne ye poora kar liya?", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Yes, Done", callback_data=f"m_done_{t['id']}")],[InlineKeyboardButton("⏳ No, Extend 15m", callback_data=f"m_ext_{t['id']}")] ]), parse_mode="HTML")
+                        try: await bot.unpin_chat_message(chat_id=int(student["telegram_id"]), message_id=t["timer_message_id"])
+                        except: pass
+                    else:
+                        try:
+                            kb = [[InlineKeyboardButton("✅ Done Early", callback_data=f"m_done_{t['id']}")], [InlineKeyboardButton("⏸ Pause (10m)", callback_data=f"m_pause_{t['id']}"), InlineKeyboardButton("⏳ Extend (15m)", callback_data=f"m_ext_{t['id']}")] ]
+                            msg_text = f"🚀 <b>TASK IN PROGRESS</b>\n━━━━━━━━━━━━━━━━━━━━\n\n📖 <b>Subject:</b> {t['subject']}\n📝 <b>Task:</b> {t['description']}\n\n⏱ <b>Time Remaining:</b> {rem} mins\n🏁 <b>Target End:</b> {est_end.strftime('%I:%M %p')}"
+                            await bot.edit_message_text(chat_id=int(student["telegram_id"]), message_id=t["timer_message_id"], text=msg_text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
+                        except: pass
+            
+            # 6. Existing Nudge Logic
+            created_at = log.get("created_at")
             if created_at:
-                created_ist = IST.localize(created_at) if created_at.tzinfo is None else created_at.astimezone(IST)
-                diff_h = (now_ist - created_ist).total_seconds() / 3600
-                if 2 <= diff_h < 4 and not log.get("nudge_1_sent"):
-                    await bot.send_message(chat_id=int(student["telegram_id"]), text="👋 Aapke daily tasks ka kya status hai? 🤔")
-                    update_daily_log(log["id"], {"nudge_1_sent": True})
-                elif 4 <= diff_h < 6 and not log.get("nudge_2_sent"):
-                    await bot.send_message(chat_id=int(student["telegram_id"]), text="🔔 Adha din nikal gaya hai! Padhai par dhyan dein. 🕒")
-                    update_daily_log(log["id"], {"nudge_2_sent": True})
-                elif 6 <= diff_h < 7 and not log.get("nudge_3_sent"):
-                    await bot.send_message(chat_id=int(student["telegram_id"]), text="🚀 Aaj ke tasks finish karein. ✨")
-                    update_daily_log(log["id"], {"nudge_3_sent": True})
-                elif diff_h >= 7 and not log.get("summary_sent"):
-                    await send_daily_planner_summary(bot, student, today)
-                    update_daily_log(log["id"], {"summary_sent": True})
+                if isinstance(created_at, str):
+                    try: created_at = datetime.fromisoformat(created_at)
+                    except: created_at = None
+                if created_at:
+                    created_ist = IST.localize(created_at) if created_at.tzinfo is None else created_at.astimezone(IST)
+                    diff_h = (now_ist - created_ist).total_seconds() / 3600
+                    if 2 <= diff_h < 4 and not log.get("nudge_1_sent"):
+                        await bot.send_message(chat_id=int(student["telegram_id"]), text="👋 Aapke daily tasks ka kya status hai? 🤔")
+                        update_daily_log(log["id"], {"nudge_1_sent": True})
+                    elif 4 <= diff_h < 6 and not log.get("nudge_2_sent"):
+                        await bot.send_message(chat_id=int(student["telegram_id"]), text="🔔 Adha din nikal gaya hai! Padhai par dhyan dein. 🕒")
+                        update_daily_log(log["id"], {"nudge_2_sent": True})
+                    elif 6 <= diff_h < 7 and not log.get("nudge_3_sent"):
+                        await bot.send_message(chat_id=int(student["telegram_id"]), text="🚀 Aaj ke tasks finish karein. ✨")
+                        update_daily_log(log["id"], {"nudge_3_sent": True})
+                    elif diff_h >= 7 and not log.get("summary_sent"):
+                        await send_daily_planner_summary(bot, student, today)
+                        update_daily_log(log["id"], {"summary_sent": True})
 
             await process_backlog_delivery(bot, student)
             c_inner.commit()
