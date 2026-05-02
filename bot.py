@@ -4854,10 +4854,9 @@ async def accept_student(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Student not found.")
             return
 
-        # Simple approval: Mark as approved and set admin as mentor
+        # Simple approval: Only use mentor_id_telegram (Text type) to avoid UUID conflicts
         updates = {
             "is_approved": True,
-            "mentor_id": str(uid),
             "mentor_id_telegram": str(uid)
         }
         update_student(student["id"], updates)
