@@ -1786,8 +1786,8 @@ def init_db():
             CREATE TABLE IF NOT EXISTS users (
                 user_id BIGINT PRIMARY KEY,
                 step VARCHAR(255),
-                created_at TIMESTAMP,
-                updated_at TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
         
@@ -2048,11 +2048,14 @@ def get_user(uid) -> Optional[Dict[str, Any]]:
     return dict(r) if r else None
 
 def upd_user(uid, fields: Dict[str, Any]):
-    if not fields: return
-    fields["updated_at"] = now_iso()
-    ks = list(fields.keys()); vs = [fields[k] for k in ks]
     c = db(); cur = db_cursor(c)
-    cur.execute(f"UPDATE users SET {', '.join([k+'=%s' for k in ks])} WHERE user_id=%s", vs + [uid])
+    # Always refresh updated_at on any change
+    fields_copy = dict(fields)
+    fields_copy["updated_at"] = datetime.now(UTC)
+    
+    cols = [f"{k}=%s" for k in fields_copy.keys()]
+    vals = list(fields_copy.values()) + [uid]
+    cur.execute(f"UPDATE users SET {', '.join(cols)} WHERE user_id=%s", vals)
     c.commit(); c.close()
 
 def get_mentorship_temp(user: Dict[str, Any]) -> Dict[str, Any]:
@@ -2295,8 +2298,9 @@ def find_student_for_approval(value: str) -> Optional[Dict[str, Any]]:
             if row:
                 c.close()
                 return dict(row)
-    except:
-        pass
+    except Exception as e:
+        c.rollback()
+        logger.debug(f"Numeric student match failed: {e}")
 
     # Fallback to text search or phone search
     cur.execute(
@@ -3811,6 +3815,45 @@ def start_student_reminders(bot):
     if student_reminder_task and not student_reminder_task.done():
         return
     student_reminder_task = asyncio.create_task(student_reminder_loop(bot))
+
+async def inactivity_watchdog_loop(bot):
+    """Resets users to main menu if inactive for > 5 minutes in a sub-step"""
+    while True:
+        try:
+            await asyncio.sleep(60) # Check every minute
+            c = db(); cur = db_cursor(c)
+            # Find users who are NOT at main menu and were last active > 5 mins ago
+            cur.execute("""
+                SELECT user_id, step FROM users 
+                WHERE step != 'ready_for_new_doubt' 
+                  AND step IS NOT NULL
+                  AND updated_at < (NOW() - INTERVAL '5 minutes')
+            """)
+            rows = [dict(r) for r in cur.fetchall()]
+            for row in rows:
+                uid = row["user_id"]
+                # Reset to main menu
+                cur.execute("UPDATE users SET step='ready_for_new_doubt', updated_at=NOW() WHERE user_id=%s", (uid,))
+                c.commit()
+                
+                # Notify the user
+                try:
+                    await bot.send_message(
+                        chat_id=uid,
+                        text="🔄 *Session Timeout*\n\nInactivity ki wajah se aapka flow reset kar diya gaya hai. Aap wapas main menu par hain.",
+                        parse_mode="Markdown",
+                        reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True)
+                    )
+                except Exception as e:
+                    logger.debug(f"Could not notify timeout for {uid}: {e}")
+            c.close()
+        except Exception as e:
+            logger.error(f"Error in inactivity watchdog: {e}")
+            await asyncio.sleep(60)
+
+
+def start_inactivity_watchdog(bot):
+    asyncio.create_task(inactivity_watchdog_loop(bot))
 
 async def maybe_ask_rating(context, uid):
     u = get_user(uid)
@@ -8417,8 +8460,9 @@ async def post_init(app):
 
     try:
         start_mentorship_scheduler(app.bot)
+        # start_inactivity_watchdog(app.bot) # Disabled as requested
     except Exception as e:
-        print(f"start_mentorship_scheduler failed: {e}")
+        print(f"Background loops failed: {e}")
 
 def run_flask_server():
     port = int(os.environ.get('PORT', 10000))
