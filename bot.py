@@ -4871,9 +4871,9 @@ async def accept_student(update: Update, context: ContextTypes.DEFAULT_TYPE):
             upd_user(sid_int, {"mentorship_mode": "approved", "mentorship_student_id": str(student["id"]), "step": "ready_for_new_doubt"})
             
             approval_msg = (
-                "🎊 *CONGRATULATIONS!*\n\n"
+                "🎊 <b>CONGRATULATIONS!</b>\n\n"
                 "Aapka Mentorship application approve ho gaya hai! ✅\n\n"
-                "🛡️ *Next Step: Parent Verification*\n"
+                "🛡️ <b>Next Step: Parent Verification</b>\n"
                 "Reports aur monitoring ke liye aapke parent ka verification zaroori hai. "
                 "Niche diye gaye link ko apne parent ko forward karein aur unse verification complete karne ko kahein:\n\n"
                 f"🔗 {parent_link}\n\n"
@@ -4883,7 +4883,7 @@ async def accept_student(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(
                 chat_id=sid_int, 
                 text=approval_msg,
-                parse_mode="Markdown",
+                parse_mode="HTML",
                 reply_markup=ReplyKeyboardMarkup([["Skip Parent Verification"], ["My Personal Mentor", "Ask Doubt"]], resize_keyboard=True)
             )
         await update.message.reply_text(f"Student {student['name']} approved successfully. Parent link sent to student.")
