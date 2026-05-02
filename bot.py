@@ -3045,35 +3045,40 @@ async def handle_parent_steps(update: Update, context: ContextTypes.DEFAULT_TYPE
     text = (update.message.text or "").strip()
     
     if step.startswith("p_agree_"):
-        student_uid = int(step.split("_")[-1])
-        if text.lower() == "yes":
-            lang = user.get("parent_lang_tmp", "English")
-            # Complete verification immediately upon "Yes"
-            update_student_by_telegram(student_uid, {
-                "parent_telegram_id": str(uid),
-                "parent_language": lang,
-                "parent_verified": True
-            })
-            
-            upd_user(uid, {"step": "ready_for_new_doubt"})
-            await update.message.reply_text(
-                f"✅ *Verification Successful!*\n\nAb aapko {lang} mein apne bache ki regular daily reports aur summaries milti rahengi. ✨", 
-                parse_mode="Markdown",
-                reply_markup=ReplyKeyboardMarkup([["My Mentorship"], ["Ask Doubt"]], resize_keyboard=True)
-            )
-            
-            # Notify student
-            try:
-                await context.bot.send_message(
-                    chat_id=student_uid, 
-                    text="✅ *Parent Verified!*\n\nAapke parent ne verification complete kar diya hai. Ab aapka Mentorship Dashboard fully active hai! 🚀",
-                    parse_mode="Markdown",
-                    reply_markup=ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True)
+        try:
+            student_uid = int(step.split("_")[-1])
+            if text.lower() == "yes":
+                lang = user.get("parent_lang_tmp", "English")
+                # Complete verification immediately upon "Yes"
+                update_student_by_telegram(student_uid, {
+                    "parent_telegram_id": str(uid),
+                    "parent_language": lang,
+                    "parent_verified": True
+                })
+                
+                upd_user(uid, {"step": "ready_for_new_doubt"})
+                await update.message.reply_text(
+                    f"✅ <b>Verification Successful!</b>\n\nAb aapko {lang} mein apne bache ki regular daily reports aur summaries milti rahengi. ✨", 
+                    parse_mode="HTML",
+                    reply_markup=ReplyKeyboardMarkup([["Child's Progress Summary"]], resize_keyboard=True)
                 )
-            except: pass
-        else:
-            upd_user(uid, {"step": "ready_for_new_doubt"})
-            await update.message.reply_text("Registration cancel kar di gayi hai.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
+                
+                # Notify student
+                try:
+                    await context.bot.send_message(
+                        chat_id=student_uid, 
+                        text="✅ <b>Parent Verified!</b>\n\nAapke parent ne verification complete kar diya hai. Ab aapka Mentorship Dashboard fully active hai! 🚀",
+                        parse_mode="HTML",
+                        reply_markup=ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True)
+                    )
+                except Exception as ne:
+                    logger.debug(f"Could not notify student {student_uid} of parent verification: {ne}")
+            else:
+                upd_user(uid, {"step": "ready_for_new_doubt"})
+                await update.message.reply_text("Registration cancel kar di gayi hai.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
+        except Exception as e:
+            logger.error(f"Error in handle_parent_steps (p_agree_): {e}", exc_info=True)
+            await update.message.reply_text("⚠️ Verification ke dauran ek technical error aayi. Please dobara try karein ya admin se sampark karein.")
         return True
 
     if step.startswith("parent_pairing_"):
@@ -4174,6 +4179,30 @@ async def send_daily_planner_summary(bot, student: Dict[str, Any], date_val: dat
                 logger.error(f"Failed to send summary to parent of {student['id']}: {pe}")
     except Exception as e:
         logger.error(f"Failed to send daily summary to {student['id']}: {e}")
+
+async def send_child_progress_to_parent(update, context, student):
+    tasks = get_student_tasks(student["id"], scheduled_date=today_ist_date())
+    if not tasks:
+        await update.message.reply_text("Abhi bache ka aaj ka koi progress record nahi hai.")
+        return
+    
+    completed = [t for t in tasks if t["status"] == "done"]
+    total = len(tasks)
+    
+    msg = f"🛡️ <b>CHILD PROGRESS REPORT</b> (<i>{student.get('name', 'Student')}</i>)\n"
+    msg += f"📅 Date: {today_ist_date().strftime('%d %b %Y')}\n"
+    msg += "━━━━━━━━━━━━━━━━━━━━\n\n"
+    msg += f"✅ <b>Completed:</b> {len(completed)}/{total}\n"
+    msg += f"⏳ <b>Pending:</b> {total - len(completed)}/{total}\n\n"
+    
+    if total > 0:
+        percent = (len(completed) / total) * 100
+        msg += f"📊 <b>Today's Efficiency:</b> {int(percent)}%\n"
+    
+    msg += "\nAapko bache ki daily night summary automatically bhi milti rahegi. ✨"
+        
+    await update.message.reply_text(msg, parse_mode="HTML")
+
 
 async def process_backlog_delivery(bot, student: Dict[str, Any]):
     now_dt = today_ist()
@@ -7272,6 +7301,22 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Admin logic removed so they can ask doubts too
     ensure_user(uid)
     u = get_user(uid)
+    
+    # Parent Restriction Flow: If this ID is a verified parent, block Mentora/Doubt access
+    parent_student = get_student_by_parent_telegram(uid)
+    if parent_student:
+        # Only allow parent to see summaries, nothing else
+        text = (update.message.text or "").strip()
+        if text == "Child's Progress Summary":
+            # Logic to send summary (already exists in other parts, will call here)
+            await send_child_progress_to_parent(update, context, parent_student)
+        else:
+            await update.message.reply_text(
+                f"Aap <b>{parent_student['name']}</b> ke parent account se logged in hain. ✨\n\nYahan aapko bache ki daily progress reports milti rahengi.",
+                parse_mode="HTML",
+                reply_markup=ReplyKeyboardMarkup([["Child's Progress Summary"]], resize_keyboard=True)
+            )
+        return
 
     if int(u["is_blocked"]) == 1:
         await update.message.reply_text(blocked_message())
