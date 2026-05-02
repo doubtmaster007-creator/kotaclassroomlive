@@ -3848,17 +3848,14 @@ async def run_mentorship_cycle(bot):
                     await send_daily_planner_summary(bot, student, today)
                     update_daily_log(log["id"], {"summary_sent": True})
 
-        c_inner.commit(); c_inner.close()
-id"]), text="🚀 *Final Nudge (6hr)*\n━━━━━━━━━━━━━━━━━━━━\n\nAlmost done! Aaj ke bache hue tasks finish karein. ✨", parse_mode="Markdown")
-                                update_daily_log(log["id"], {"nudge_3_sent": True})
-                            elif diff_hours >= 7 and not log.get("summary_sent"):
-                                await send_daily_planner_summary(bot, student, today)
-                                update_daily_log(log["id"], {"summary_sent": True})
-
-
             await process_backlog_delivery(bot, student)
+            c_inner.commit()
         except Exception as e:
             logger.error(f"Mentorship cycle error for student {student.get('id')}: {e}")
+        finally:
+            try: c_inner.close()
+            except: pass
+    return
 
 async def mentorship_scheduler_loop(bot):
     while True:
