@@ -2286,7 +2286,19 @@ def find_student_for_approval(value: str) -> Optional[Dict[str, Any]]:
     value = (value or "").strip()
     c = db(); cur = db_cursor(c)
     clean_val = re.sub(r"\D", "", value)
-    # Robust search: cast telegram_id to text and check both ID and phone
+    
+    # Try numeric match first for telegram_id
+    try:
+        if value.isdigit():
+            cur.execute("SELECT * FROM students WHERE telegram_id = %s LIMIT 1", (int(value),))
+            row = cur.fetchone()
+            if row:
+                c.close()
+                return dict(row)
+    except:
+        pass
+
+    # Fallback to text search or phone search
     cur.execute(
         """
         SELECT * FROM students
@@ -4765,58 +4777,62 @@ async def show_backlog_command(update: Update, context: ContextTypes.DEFAULT_TYP
     await update.message.reply_text("\n".join(lines))
 
 async def accept_student(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.message.from_user.id
-    if not (is_admin_user(uid) or is_faculty_user(uid)):
-        await update.message.reply_text("Only faculty/admin can approve students.")
-        return
-    value = " ".join(context.args).strip()
-    if not value:
-        pending = get_pending_student_approvals()
-        if not pending:
-            await update.message.reply_text("No pending mentorship approvals.")
+    try:
+        uid = update.message.from_user.id
+        if not (is_admin_user(uid) or is_faculty_user(uid)):
+            await update.message.reply_text("Only faculty/admin can approve students.")
             return
-        lines = ["Pending students:"]
-        for row in pending[:10]:
-            lines.append(f"- {row.get('name')} | TG {row.get('telegram_id')} | Phone {row.get('phone')}")
-        lines.append("Use /accept_student <telegram_id_or_phone>")
-        await update.message.reply_text("\n".join(lines))
-        return
-    student = find_student_for_approval(value)
-    if not student:
-        await update.message.reply_text("Student not found.")
-        return
-    faculty = get_faculty_by_telegram(uid)
-    updates = {"is_approved": True}
-    if faculty:
-        updates["mentor_id"] = faculty["id"]
-        updates["mentor_id_telegram"] = faculty["telegram_id"]
-    update_student(student["id"], updates)
-    sid = student["telegram_id"]
-    if sid:
-        sid_int = int(sid)
-        bot_username = (await context.bot.get_me()).username
-        # Using 'p' prefix to avoid underscore issues in deep links
-        parent_link = f"https://t.me/{bot_username}?start=p{sid}"
-        
-        upd_user(sid_int, {"mentorship_mode": "approved", "mentorship_student_id": str(student["id"]), "step": "ready_for_new_doubt"})
-        
-        approval_msg = (
-            "🎊 *CONGRATULATIONS!*\n\n"
-            "Aapka Mentorship application approve ho gaya hai! ✅\n\n"
-            "🛡️ *Next Step: Parent Verification*\n"
-            "Reports aur monitoring ke liye aapke parent ka verification zaroori hai. "
-            "Niche diye gaye link ko apne parent ko forward karein aur unse verification complete karne ko kahein:\n\n"
-            f"🔗 {parent_link}\n\n"
-            "Parent verification ke baad aapka dashboard fully active ho jayega. ✨"
-        )
-        
-        await context.bot.send_message(
-            chat_id=sid_int, 
-            text=approval_msg,
-            parse_mode="Markdown",
-            reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True)
-        )
-    await update.message.reply_text(f"Student {student['name']} approved successfully. Parent link sent to student.")
+        value = " ".join(context.args).strip()
+        if not value:
+            pending = get_pending_student_approvals()
+            if not pending:
+                await update.message.reply_text("No pending mentorship approvals.")
+                return
+            lines = ["Pending students:"]
+            for row in pending[:10]:
+                lines.append(f"- {row.get('name')} | TG {row.get('telegram_id')} | Phone {row.get('phone')}")
+            lines.append("Use /accept_student <telegram_id_or_phone>")
+            await update.message.reply_text("\n".join(lines))
+            return
+        student = find_student_for_approval(value)
+        if not student:
+            await update.message.reply_text("Student not found.")
+            return
+        faculty = get_faculty_by_telegram(uid)
+        updates = {"is_approved": True}
+        if faculty:
+            updates["mentor_id"] = faculty["id"]
+            updates["mentor_id_telegram"] = faculty["telegram_id"]
+        update_student(student["id"], updates)
+        sid = student["telegram_id"]
+        if sid:
+            sid_int = int(sid)
+            bot_username = (await context.bot.get_me()).username
+            # Using 'p' prefix to avoid underscore issues in deep links
+            parent_link = f"https://t.me/{bot_username}?start=p{sid}"
+            
+            upd_user(sid_int, {"mentorship_mode": "approved", "mentorship_student_id": str(student["id"]), "step": "ready_for_new_doubt"})
+            
+            approval_msg = (
+                "🎊 *CONGRATULATIONS!*\n\n"
+                "Aapka Mentorship application approve ho gaya hai! ✅\n\n"
+                "🛡️ *Next Step: Parent Verification*\n"
+                "Reports aur monitoring ke liye aapke parent ka verification zaroori hai. "
+                "Niche diye gaye link ko apne parent ko forward karein aur unse verification complete karne ko kahein:\n\n"
+                f"🔗 {parent_link}\n\n"
+                "Parent verification ke baad aapka dashboard fully active ho jayega. ✨"
+            )
+            
+            await context.bot.send_message(
+                chat_id=sid_int, 
+                text=approval_msg,
+                parse_mode="Markdown",
+                reply_markup=ReplyKeyboardMarkup([["Skip Parent Verification"], ["My Personal Mentor", "Ask Doubt"]], resize_keyboard=True)
+            )
+        await update.message.reply_text(f"Student {student['name']} approved successfully. Parent link sent to student.")
+    except Exception as e:
+        logger.error(f"Error in accept_student: {e}", exc_info=True)
+        await update.message.reply_text(f"⚠️ Error approving student: {str(e)}")
 
 async def mentorreply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.message.from_user.id
@@ -7212,6 +7228,21 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "Refresh" or text == "/start":
         upd_user(uid, {"step": "ready_for_new_doubt", "mentorship_mode": "active"})
         await update.message.reply_text("🔄 Flow refresh kar diya gaya hai. Wapas main menu par 👇", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
+        return
+
+    if incoming == "Skip Parent Verification":
+        student = get_student_by_telegram(uid)
+        if student:
+            update_student(student["id"], {
+                "parent_verified": True,
+                "parent_verification_requested_at": None,
+                "parent_language": "English"
+            })
+            await update.message.reply_text(
+                "✅ Parent verification skip kar di gayi hai. Aapka dashboard active hai! 🚀",
+                reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True)
+            )
+            await mentorship(update, context)
         return
 
     if text.strip().casefold() in {"cancel doubt", "cancel"}:
