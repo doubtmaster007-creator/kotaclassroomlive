@@ -3227,61 +3227,67 @@ def get_system_prompt(subject: str, stream: str = "", chapter: str = "", goal: s
     extra = SUBJECT_PROMPTS.get(subject, "")
     return f"{COMMON_PROMPT}\n\n{extra}".strip()
 
-def anthropic_text(prompt: str, system_prompt: str = None, model: str = None) -> str:
-    if system_prompt is None:
-        system_prompt = COMMON_PROMPT
-    if model is None:
-        model = MODEL_SONNET
-    msg = client.messages.create(
-        model=model,
-        max_tokens=4000,
-        system=system_prompt,
-        messages=[{"role": "user", "content": prompt}]
-    )
-    return "".join(block.text for block in msg.content if getattr(block, "type", "") == "text")
-
-def anthropic_with_image(prompt: str, image_b64: str, media_type: str = "image/jpeg", system_prompt: str = None, model: str = None) -> str:
+async def anthropic_text(prompt: str, system_prompt: str = None, model: str = None) -> str:
     if system_prompt is None:
         system_prompt = COMMON_PROMPT
     if model is None:
         model = MODEL_SONNET
     
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            msg = client.messages.create(
-                model=model,
-                max_tokens=4000,
-                system=system_prompt,
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": media_type,
-                                "data": image_b64
-                            }
-                        }
-                    ]
-                }],
-                timeout=60
-            )
-            return "".join(block.text for block in msg.content if getattr(block, "type", "") == "text")
-        except Exception as e:
-            logger.error(f"Anthropic API Error (Attempt {attempt+1}/{max_retries}): {e}")
-            if attempt == max_retries - 1:
-                raise e
-            # Small delay before retry could be added here if needed, 
-            # but usually a simple retry is fine for transient timeouts.
-    return ""
+    # Run synchronous Anthropic call in a separate thread to avoid blocking event loop
+    def _call():
+        msg = client.messages.create(
+            model=model,
+            max_tokens=4000,
+            system=system_prompt,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return "".join(block.text for block in msg.content if getattr(block, "type", "") == "text")
+    
+    return await asyncio.to_thread(_call)
 
-def call_json_prompt(prompt_template: str, payload: Dict[str, Any], model: str = None) -> Dict[str, Any]:
+async def anthropic_with_image(prompt: str, image_b64: str, media_type: str = "image/jpeg", system_prompt: str = None, model: str = None) -> str:
+    if system_prompt is None:
+        system_prompt = COMMON_PROMPT
+    if model is None:
+        model = MODEL_SONNET
+    
+    def _call():
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                msg = client.messages.create(
+                    model=model,
+                    max_tokens=4000,
+                    system=system_prompt,
+                    messages=[{
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": media_type,
+                                    "data": image_b64
+                                }
+                            }
+                        ]
+                    }],
+                    timeout=60
+                )
+                return "".join(block.text for block in msg.content if getattr(block, "type", "") == "text")
+            except Exception as e:
+                logger.error(f"Anthropic API Error (Attempt {attempt+1}/{max_retries}): {e}")
+                if attempt == max_retries - 1:
+                    raise e
+        return ""
+    
+    return await asyncio.to_thread(_call)
+
+async def call_json_prompt(prompt_template: str, payload: Dict[str, Any], model: str = None) -> Dict[str, Any]:
     prompt = prompt_template.strip() + "\n\nInput Data:\n" + json.dumps(payload, ensure_ascii=True)
-    raw = anthropic_text(prompt, system_prompt="Return valid JSON only.", model=model or PLANNER_MODEL).strip()
-    raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+    raw = await anthropic_text(prompt, system_prompt="Return valid JSON only.", model=model or PLANNER_MODEL)
+    raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
     try:
         return json.loads(raw)
     except Exception:
@@ -3715,146 +3721,162 @@ async def resume_reminders(bot):
                     clear_teacher_session(int(claimed_by))
 
 async def run_mentorship_cycle(bot):
-    # 1. 3-Day Backlog Rollover
-    today = today_ist_date()
-    c = db(); cur = db_cursor(c)
-    three_days_ago = today - timedelta(days=3)
-    # Corrected rollover logic: Fetch tasks first to create proper backlog entries
-    cur.execute("SELECT * FROM tasks WHERE status='pending' AND scheduled_date < %s", (three_days_ago,))
-    old_tasks = cur.fetchall()
-    for t in old_tasks:
-        # Move to backlogs table
-        cur.execute("""
-            INSERT INTO backlogs (student_id, subject, topic, description, source, priority, status, added_by, created_at)
-            VALUES (%s, %s, %s, %s, 'ROLLOVER', %s, 'pending', 'system', now())
-        """, (t["student_id"], t["subject"], t["topic"], t["description"], t["priority"]))
-        # Mark task as rollovered
-        cur.execute("UPDATE tasks SET status='backlog' WHERE id=%s", (t["id"],))
-    c.commit(); c.close()
+    # Use a single connection for the entire background cycle to avoid exhaustion
+    c_main = db(); cur_main = db_cursor(c_main)
+    try:
+        today = today_ist_date()
+        now_ist = datetime.now(IST)
+        
+        # 1. 3-Day Backlog Rollover
+        three_days_ago = today - timedelta(days=3)
+        cur_main.execute("SELECT * FROM tasks WHERE status='pending' AND scheduled_date < %s", (three_days_ago,))
+        old_tasks = cur_main.fetchall()
+        for t in old_tasks:
+            cur_main.execute("""
+                INSERT INTO backlogs (student_id, subject, topic, description, source, priority, status, added_by, created_at)
+                VALUES (%s, %s, %s, %s, 'ROLLOVER', %s, 'pending', 'system', now())
+            """, (t["student_id"], t["subject"], t["topic"], t["description"], t["priority"]))
+            cur_main.execute("UPDATE tasks SET status='backlog' WHERE id=%s", (t["id"],))
+        c_main.commit()
 
-    # 2. 48-Hour Parent Verification Timeout
-    c = db(); cur = db_cursor(c)
-    timeout_limit = datetime.now(UTC) - timedelta(hours=48)
-    cur.execute("SELECT telegram_id, name FROM students WHERE parent_verified=false AND parent_verification_requested_at < %s", (timeout_limit,))
-    expired_students = cur.fetchall()
-    for s in expired_students:
-        upd_user(int(s["telegram_id"]), {"step": "mentor_parent_phone", "mentorship_mode": "registering"})
-        update_student_by_telegram(int(s["telegram_id"]), {"parent_verified": False, "parent_verification_requested_at": None})
-        try:
-            await bot.send_message(chat_id=int(s["telegram_id"]), text="⚠️ Parent verification link expire ho gaya hai (48 hours). Please apne parent ka number firse provide karein registration restart karne ke liye.")
-        except: pass
-    c.commit(); c.close()
-
-    now_ist = datetime.now(IST)
-    today = now_ist.date()
-
-    # 3. Sunday Weekly Report Trigger (Every Sunday at 9:00 AM)
-    if now_ist.strftime("%A") == "Sunday" and now_ist.hour == 9 and now_ist.minute <= 5:
-        for student in active_students():
-            log = get_or_create_daily_log(student["id"], today)
-            if not log.get("weekly_report_sent"):
-                await send_weekly_mentorship_summary(bot, student["id"])
-                update_daily_log(log["id"], {"weekly_report_sent": True})
-
-    # 4. General Mentorship Cycle (Reminders + Timers)
-    for student in active_students():
-        try:
-            log = get_or_create_daily_log(student["id"], today)
-            day_name = now_ist.strftime("%A")
-            c_inner = db(); cur_inner = db_cursor(c_inner)
-            cur_inner.execute("SELECT coaching_slots FROM weekly_timetable WHERE student_id=%s AND day_of_week=%s", (student["id"], day_name))
-            tt_row = cur_inner.fetchone()
-            
-            if tt_row and tt_row["coaching_slots"]:
-                slots = json.loads(tt_row["coaching_slots"]) if isinstance(tt_row["coaching_slots"], str) else tt_row["coaching_slots"]
-                if slots:
-                    times = []
-                    for s in slots:
-                        try:
-                            t_str = s.get("start_time", s.get("time"))
-                            t_dt = datetime.strptime(t_str, "%I:%M %p").time()
-                            times.append(t_dt)
-                        except: continue
-                    
-                    if times:
-                        first_class = min(times)
-                        last_class = max(times)
-                        
-                        # Morning Reminder (20 mins before first class)
-                        first_dt = IST.localize(datetime.combine(today, first_class))
-                        diff_pre = (first_dt - now_ist).total_seconds() / 60
-                        if 15 <= diff_pre <= 25 and not log.get("morning_reminder_sent"):
-                            classes_text = "\n".join([f"• {s.get('subject')}: {s.get('start_time', s.get('time'))}" for s in slots])
-                            await bot.send_message(chat_id=int(student["telegram_id"]), text=f"☀️ <b>Good Morning!</b>\n\nAapki coaching classes shuru hone wali hain:\n\n{classes_text}\n\nBest of luck! 🚀", parse_mode="HTML")
-                            update_daily_log(log["id"], {"morning_reminder_sent": True})
-                        
-                        # Post-Coaching Trigger (30 mins after last class ends - assume 90m per class)
-                        est_end = IST.localize(datetime.combine(today, last_class) + timedelta(minutes=90))
-                        diff_post = (now_ist - est_end).total_seconds() / 60
-                        if 30 <= diff_post <= 60 and not log.get("scheduler_prompt_sent"):
-                            cur_inner.execute("SELECT count(*) FROM tasks WHERE student_id=%s AND scheduled_date=%s", (student["id"], today))
-                            if cur_inner.fetchone()[0] == 0:
-                                await bot.send_message(chat_id=int(student["telegram_id"]), text="🏠 <b>Coaching Over!</b>\n\nAb time hai aaj ka plan banane ka. 'Daily Scheduler' dabayein. ✨", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True), parse_mode="HTML")
-                                update_daily_log(log["id"], {"scheduler_prompt_sent": True})
-
-            # 5. Live Task Timer Updates
-            cur_inner.execute("SELECT * FROM tasks WHERE student_id=%s AND status='in_progress' AND scheduled_date=%s", (student["id"], today))
-            active_tasks = cur_inner.fetchall()
-            for t in active_tasks:
-                if t.get("is_paused"):
-                    p_at = t["paused_at"]
-                    if p_at:
-                        if p_at.tzinfo is None: p_at = IST.localize(p_at)
-                        if (now_ist - p_at).total_seconds() / 60 >= 10:
-                            cur_inner.execute("UPDATE tasks SET is_paused=false, updated_at=now() WHERE id=%s", (t["id"],))
-                            await bot.send_message(chat_id=int(student["telegram_id"]), text=f"⏰ 10 minute break over! <b>{t['subject']}</b> task resume ho raha hai.", parse_mode="HTML")
-                    continue
-                
-                est_end = t["estimated_end_time"]
-                if est_end:
-                    if est_end.tzinfo is None: est_end = IST.localize(est_end)
-                    rem = int((est_end - now_ist).total_seconds() / 60)
-                    if rem <= 0:
-                        cur_inner.execute("UPDATE tasks SET status='awaiting_status', updated_at=now() WHERE id=%s", (t["id"],))
-                        await bot.send_message(chat_id=int(student["telegram_id"]), text=f"🔔 <b>Time's up for:</b> {t['subject']}\n\nKya aapne ye poora kar liya?", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Yes, Done", callback_data=f"m_done_{t['id']}")],[InlineKeyboardButton("⏳ No, Extend 15m", callback_data=f"m_ext_{t['id']}")] ]), parse_mode="HTML")
-                        try: await bot.unpin_chat_message(chat_id=int(student["telegram_id"]), message_id=t["timer_message_id"])
-                        except: pass
-                    else:
-                        try:
-                            kb = [[InlineKeyboardButton("✅ Done Early", callback_data=f"m_done_{t['id']}")], [InlineKeyboardButton("⏸ Pause (10m)", callback_data=f"m_pause_{t['id']}"), InlineKeyboardButton("⏳ Extend (15m)", callback_data=f"m_ext_{t['id']}")] ]
-                            msg_text = f"🚀 <b>TASK IN PROGRESS</b>\n━━━━━━━━━━━━━━━━━━━━\n\n📖 <b>Subject:</b> {t['subject']}\n📝 <b>Task:</b> {t['description']}\n\n⏱ <b>Time Remaining:</b> {rem} mins\n🏁 <b>Target End:</b> {est_end.strftime('%I:%M %p')}"
-                            await bot.edit_message_text(chat_id=int(student["telegram_id"]), message_id=t["timer_message_id"], text=msg_text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
-                        except: pass
-            
-            # 6. Existing Nudge Logic
-            created_at = log.get("created_at")
-            if created_at:
-                if isinstance(created_at, str):
-                    try: created_at = datetime.fromisoformat(created_at)
-                    except: created_at = None
-                if created_at:
-                    created_ist = IST.localize(created_at) if created_at.tzinfo is None else created_at.astimezone(IST)
-                    diff_h = (now_ist - created_ist).total_seconds() / 3600
-                    if 2 <= diff_h < 4 and not log.get("nudge_1_sent"):
-                        await bot.send_message(chat_id=int(student["telegram_id"]), text="👋 Aapke daily tasks ka kya status hai? 🤔")
-                        update_daily_log(log["id"], {"nudge_1_sent": True})
-                    elif 4 <= diff_h < 6 and not log.get("nudge_2_sent"):
-                        await bot.send_message(chat_id=int(student["telegram_id"]), text="🔔 Adha din nikal gaya hai! Padhai par dhyan dein. 🕒")
-                        update_daily_log(log["id"], {"nudge_2_sent": True})
-                    elif 6 <= diff_h < 7 and not log.get("nudge_3_sent"):
-                        await bot.send_message(chat_id=int(student["telegram_id"]), text="🚀 Aaj ke tasks finish karein. ✨")
-                        update_daily_log(log["id"], {"nudge_3_sent": True})
-                    elif diff_h >= 7 and not log.get("summary_sent"):
-                        await send_daily_planner_summary(bot, student, today)
-                        update_daily_log(log["id"], {"summary_sent": True})
-
-            await process_backlog_delivery(bot, student)
-            c_inner.commit()
-        except Exception as e:
-            logger.error(f"Mentorship cycle error for student {student.get('id')}: {e}")
-        finally:
-            try: c_inner.close()
+        # 2. 48-Hour Parent Verification Timeout
+        timeout_limit = datetime.now(UTC) - timedelta(hours=48)
+        cur_main.execute("SELECT telegram_id, name FROM students WHERE parent_verified=false AND parent_verification_requested_at < %s", (timeout_limit,))
+        expired_students = cur_main.fetchall()
+        for s in expired_students:
+            cur_main.execute("UPDATE users SET step='mentor_parent_phone', mentorship_mode='registering', updated_at=now() WHERE user_id=%s", (int(s["telegram_id"]),))
+            cur_main.execute("UPDATE students SET parent_verified=false, parent_verification_requested_at=NULL, updated_at=now() WHERE telegram_id=%s", (str(s["telegram_id"]),))
+            try:
+                await bot.send_message(chat_id=int(s["telegram_id"]), text="⚠️ Parent verification link expire ho gaya hai (48 hours). Please apne parent ka number firse provide karein registration restart karne ke liye.")
             except: pass
+        c_main.commit()
+
+        # Fetch active students ONCE
+        cur_main.execute("SELECT * FROM students WHERE is_approved=True")
+        students = cur_main.fetchall()
+        
+        for student in students:
+            try:
+                # Get daily log
+                cur_main.execute("SELECT * FROM daily_logs WHERE student_id=%s AND date=%s", (student["id"], today))
+                log = cur_main.fetchone()
+                if not log:
+                    cur_main.execute("INSERT INTO daily_logs (student_id, date, created_at) VALUES (%s,%s,now()) RETURNING *", (student["id"], today))
+                    log = cur_main.fetchone()
+                    c_main.commit()
+                
+                # 3. Sunday Weekly Report Trigger
+                if now_ist.strftime("%A") == "Sunday" and now_ist.hour == 9 and now_ist.minute <= 5:
+                    if not log.get("weekly_report_sent"):
+                        await send_weekly_mentorship_summary(bot, student["id"])
+                        cur_main.execute("UPDATE daily_logs SET weekly_report_sent=true WHERE id=%s", (log["id"],))
+                        c_main.commit()
+
+                # 4. Reminders & Post-Class
+                day_name = now_ist.strftime("%A")
+                cur_main.execute("SELECT coaching_slots FROM weekly_timetable WHERE student_id=%s AND day_of_week=%s", (student["id"], day_name))
+                tt_row = cur_main.fetchone()
+                
+                if tt_row and tt_row["coaching_slots"]:
+                    slots = json.loads(tt_row["coaching_slots"]) if isinstance(tt_row["coaching_slots"], str) else tt_row["coaching_slots"]
+                    if slots:
+                        times = []
+                        for s in slots:
+                            try:
+                                t_str = s.get("start_time", s.get("time"))
+                                t_dt = datetime.strptime(t_str, "%I:%M %p").time()
+                                times.append(t_dt)
+                            except: continue
+                        
+                        if times:
+                            first_class = min(times)
+                            last_class = max(times)
+                            
+                            # Morning Reminder
+                            first_dt = IST.localize(datetime.combine(today, first_class))
+                            if 15 <= (first_dt - now_ist).total_seconds() / 60 <= 25 and not log.get("morning_reminder_sent"):
+                                classes_text = "\n".join([f"• {s.get('subject')}: {s.get('start_time', s.get('time'))}" for s in slots])
+                                await bot.send_message(chat_id=int(student["telegram_id"]), text=f"☀️ <b>Good Morning!</b>\n\nAapki coaching classes shuru hone wali hain:\n\n{classes_text}\n\nBest of luck! 🚀", parse_mode="HTML")
+                                cur_main.execute("UPDATE daily_logs SET morning_reminder_sent=true WHERE id=%s", (log["id"],))
+                                c_main.commit()
+                            
+                            # Post-Coaching Trigger
+                            est_end = IST.localize(datetime.combine(today, last_class) + timedelta(minutes=90))
+                            if 30 <= (now_ist - est_end).total_seconds() / 60 <= 60 and not log.get("scheduler_prompt_sent"):
+                                cur_main.execute("SELECT count(*) FROM tasks WHERE student_id=%s AND scheduled_date=%s", (student["id"], today))
+                                if cur_main.fetchone()[0] == 0:
+                                    await bot.send_message(chat_id=int(student["telegram_id"]), text="🏠 <b>Coaching Over!</b>\n\nAb time hai aaj ka plan banane ka. 'Daily Scheduler' dabayein. ✨", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True), parse_mode="HTML")
+                                    cur_main.execute("UPDATE daily_logs SET scheduler_prompt_sent=true WHERE id=%s", (log["id"],))
+                                    c_main.commit()
+
+                # 5. Live Task Timer Updates
+                cur_main.execute("SELECT * FROM tasks WHERE student_id=%s AND status='in_progress' AND scheduled_date=%s", (student["id"], today))
+                active_tasks = cur_main.fetchall()
+                for t in active_tasks:
+                    if t.get("is_paused"):
+                        p_at = t["paused_at"]
+                        if p_at:
+                            if p_at.tzinfo is None: p_at = IST.localize(p_at)
+                            if (now_ist - p_at).total_seconds() / 60 >= 10:
+                                cur_main.execute("UPDATE tasks SET is_paused=false, updated_at=now() WHERE id=%s", (t["id"],))
+                                c_main.commit()
+                                await bot.send_message(chat_id=int(student["telegram_id"]), text=f"⏰ 10 minute break over! <b>{t['subject']}</b> task resume ho raha hai.", parse_mode="HTML")
+                        continue
+                    
+                    est_end = t["estimated_end_time"]
+                    if est_end:
+                        if est_end.tzinfo is None: est_end = IST.localize(est_end)
+                        rem = int((est_end - now_ist).total_seconds() / 60)
+                        if rem <= 0:
+                            cur_main.execute("UPDATE tasks SET status='awaiting_status', updated_at=now() WHERE id=%s", (t["id"],))
+                            c_main.commit()
+                            await bot.send_message(chat_id=int(student["telegram_id"]), text=f"🔔 <b>Time's up for:</b> {t['subject']}\n\nKya aapne ye poora kar liya?", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Yes, Done", callback_data=f"m_done_{t['id']}")],[InlineKeyboardButton("⏳ No, Extend 15m", callback_data=f"m_ext_{t['id']}")] ]), parse_mode="HTML")
+                            try: await bot.unpin_chat_message(chat_id=int(student["telegram_id"]), message_id=t["timer_message_id"])
+                            except: pass
+                        else:
+                            try:
+                                kb = [[InlineKeyboardButton("✅ Done Early", callback_data=f"m_done_{t['id']}")], [InlineKeyboardButton("⏸ Pause (10m)", callback_data=f"m_pause_{t['id']}"), InlineKeyboardButton("⏳ Extend (15m)", callback_data=f"m_ext_{t['id']}")] ]
+                                msg_text = f"🚀 <b>TASK IN PROGRESS</b>\n━━━━━━━━━━━━━━━━━━━━\n\n📖 <b>Subject:</b> {t['subject']}\n📝 <b>Task:</b> {t['description']}\n\n⏱ <b>Time Remaining:</b> {rem} mins\n🏁 <b>Target End:</b> {est_end.strftime('%I:%M %p')}"
+                                await bot.edit_message_text(chat_id=int(student["telegram_id"]), message_id=t["timer_message_id"], text=msg_text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
+                            except: pass
+                
+                # 6. Nudges
+                created_at = log.get("created_at")
+                if created_at:
+                    if isinstance(created_at, str):
+                        try: created_at = datetime.fromisoformat(created_at)
+                        except: created_at = None
+                    if created_at:
+                        created_ist = IST.localize(created_at) if created_at.tzinfo is None else created_at.astimezone(IST)
+                        diff_h = (now_ist - created_ist).total_seconds() / 3600
+                        if 2 <= diff_h < 4 and not log.get("nudge_1_sent"):
+                            await bot.send_message(chat_id=int(student["telegram_id"]), text="👋 Aapke daily tasks ka kya status hai? 🤔")
+                            cur_main.execute("UPDATE daily_logs SET nudge_1_sent=true WHERE id=%s", (log["id"],))
+                            c_main.commit()
+                        elif 4 <= diff_h < 6 and not log.get("nudge_2_sent"):
+                            await bot.send_message(chat_id=int(student["telegram_id"]), text="🔔 Adha din nikal gaya hai! Padhai par dhyan dein. 🕒")
+                            cur_main.execute("UPDATE daily_logs SET nudge_2_sent=true WHERE id=%s", (log["id"],))
+                            c_main.commit()
+                        elif 6 <= diff_h < 7 and not log.get("nudge_3_sent"):
+                            await bot.send_message(chat_id=int(student["telegram_id"]), text="🚀 Aaj ke tasks finish karein. ✨")
+                            cur_main.execute("UPDATE daily_logs SET nudge_3_sent=true WHERE id=%s", (log["id"],))
+                            c_main.commit()
+                        elif diff_h >= 7 and not log.get("summary_sent"):
+                            await send_daily_planner_summary(bot, student, today)
+                            cur_main.execute("UPDATE daily_logs SET summary_sent=true WHERE id=%s", (log["id"],))
+                            c_main.commit()
+
+                # 7. Backlog Delivery
+                await process_backlog_delivery(bot, student)
+                
+            except Exception as e_inner:
+                logger.error(f"Error for student {student.get('id')}: {e_inner}")
+                c_main.rollback()
+
+    except Exception as e_outer:
+        logger.error(f"Outer Mentorship Cycle Error: {e_outer}")
+    finally:
+        c_main.close()
     return
 
 async def mentorship_scheduler_loop(bot):
@@ -3903,34 +3925,36 @@ async def inactivity_watchdog_loop(bot):
         try:
             await asyncio.sleep(60) # Check every minute
             c = db(); cur = db_cursor(c)
-            # Find users who are NOT at main menu and were last active > 5 mins ago
-            cur.execute("""
-                SELECT user_id, step FROM users 
-                WHERE step != 'ready_for_new_doubt' 
-                  AND step IS NOT NULL
-                  AND updated_at < (NOW() - INTERVAL '5 minutes')
-            """)
-            rows = [dict(r) for r in cur.fetchall()]
-            for row in rows:
-                uid = row["user_id"]
-                # Reset to main menu
-                cur.execute("UPDATE users SET step='ready_for_new_doubt', updated_at=NOW() WHERE user_id=%s", (uid,))
-                c.commit()
-                
-                # Notify the user
-                try:
-                    await bot.send_message(
-                        chat_id=uid,
-                        text="🔄 *Session Timeout*\n\nInactivity ki wajah se aapka flow reset kar diya gaya hai. Aap wapas main menu par hain.",
-                        parse_mode="Markdown",
-                        reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True)
-                    )
-                except Exception as e:
-                    logger.debug(f"Could not notify timeout for {uid}: {e}")
-            c.close()
+            try:
+                # Find users who are NOT at main menu and were last active > 5 mins ago
+                cur.execute("""
+                    SELECT user_id, step FROM users 
+                    WHERE step != 'ready_for_new_doubt' 
+                      AND step IS NOT NULL
+                      AND updated_at < (NOW() - INTERVAL '5 minutes')
+                """)
+                rows = [dict(r) for r in cur.fetchall()]
+                for row in rows:
+                    uid = row["user_id"]
+                    # Reset to main menu
+                    cur.execute("UPDATE users SET step='ready_for_new_doubt', updated_at=NOW() WHERE user_id=%s", (uid,))
+                    c.commit()
+                    
+                    # Notify the user
+                    try:
+                        await bot.send_message(
+                            chat_id=uid,
+                            text="🔄 *Session Timeout*\n\nInactivity ki wajah se aapka flow reset kar diya gaya hai. Aap wapas main menu par hain.",
+                            parse_mode="Markdown",
+                            reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True)
+                        )
+                    except Exception as e:
+                        logger.debug(f"Could not notify timeout for {uid}: {e}")
+            finally:
+                c.close()
         except Exception as e:
             logger.error(f"Error in inactivity watchdog: {e}")
-            await asyncio.sleep(60)
+            await asyncio.sleep(10)
 
 
 def start_inactivity_watchdog(bot):
@@ -4439,13 +4463,14 @@ async def send_weekly_mentorship_summary(bot, student_id):
     
     # Send to Parent (with translation)
     parent_id = student.get("parent_telegram_id")
-    if parent_id:
+    if parent_id and student.get("parent_verified"):
         parent_lang = student.get("parent_preferred_language", "Hindi")
         try:
             translation_prompt = f"Translate this student progress report to {parent_lang}. Keep it encouraging for the parent. Report:\n{msg}"
-            translated_msg = call_claude(translation_prompt) # Assuming helper for Claude exists
+            translated_msg = await anthropic_text(translation_prompt)
             await bot.send_message(chat_id=int(parent_id), text=f"👨‍👩‍👧‍👦 <b>Weekly Report (Translated):</b>\n\n{translated_msg}", parse_mode="HTML")
-        except:
+        except Exception as te:
+            logger.error(f"Weekly translation failed: {te}")
             # Fallback to original if translation fails
             await bot.send_message(chat_id=int(parent_id), text=f"👨‍👩‍👧‍👦 <b>Weekly Report:</b>\n\n{msg}", parse_mode="HTML")
     
