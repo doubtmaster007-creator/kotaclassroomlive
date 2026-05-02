@@ -4845,16 +4845,23 @@ async def accept_student(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lines.append("Use /accept_student <telegram_id_or_phone>")
             await update.message.reply_text("\n".join(lines))
             return
+        if not is_admin_user(uid):
+            await update.message.reply_text("Only admin can approve students.")
+            return
+            
         student = find_student_for_approval(value)
         if not student:
             await update.message.reply_text("Student not found.")
             return
-        faculty = get_faculty_by_telegram(uid)
-        updates = {"is_approved": True}
-        if faculty:
-            updates["mentor_id"] = faculty["id"]
-            updates["mentor_id_telegram"] = faculty["telegram_id"]
+
+        # Simple approval: Mark as approved and set admin as mentor
+        updates = {
+            "is_approved": True,
+            "mentor_id": str(uid),
+            "mentor_id_telegram": str(uid)
+        }
         update_student(student["id"], updates)
+
         sid = student["telegram_id"]
         if sid:
             sid_int = int(sid)
