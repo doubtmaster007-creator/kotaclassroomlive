@@ -94,10 +94,29 @@ MENTORSHIP_GROUP_ID = int(os.getenv("MENTORSHIP_GROUP_ID", str(GROUP_CHAT_ID)))
 MENTORSHIP_CHECK_SECONDS = 60
 PLANNER_MODEL = os.getenv("MENTORSHIP_MODEL", MODEL_HAIKU)
 
+MENTORSHIP_DASHBOARD_KB = [
+    ["Daily Scheduler", "Backlogs"],
+    ["Show My Self-Study Planner"],
+    ["Medical Leave", "Bot Guide"],
+    ["Back", "Ask Doubt"]
+]
+
+SCHEDULER_SUBJECT_OPTIONS = [
+    ["Physics", "Mathematics"],
+    ["Chemistry (OC)", "Chemistry (IOC)", "Chemistry (PC)"],
+    ["Back"]
+]
+
+PRIORITY_OPTIONS = [
+    ["High", "Medium", "Low"],
+    ["Back"]
+]
+
 MENTORSHIP_CLEAN_MENU = [
     ["Backlogs", "Generate My Daily Plan"],
     ["Back", "Ask Doubt"]
 ]
+
 TIMETABLE_CHANGE_OPTIONS = [["Change Timetable"], ["Back", "Ask Doubt"]]
 
 SUMMARY_MENU = [["Weekly Summary", "Monthly Summary"], ["Back", "Ask Doubt"]]
@@ -109,9 +128,9 @@ BACKLOGS_MENU = [["Check Backlogs", "Add Backlogs"], ["Back", "Ask Doubt"]]
 
 # Integrated Two-Tab Mentorship UI
 MENTORSHIP_TABS_KB = [
-    ["Ask Doubt", "Backlogs"],
-    ["Daily Planner", "Daily Scheduler"],
-    ["Show My Self-Study Planner"]
+    ["Daily Scheduler", "Backlogs"],
+    ["Show My Self-Study Planner"],
+    ["Back", "Ask Doubt"]
 ]
 
 TAB1_BACKLOG_OPTS_KB = [
@@ -2016,7 +2035,25 @@ def init_db():
         ensure_column_pg(conn, "backlogs", "last_sent_date", "DATE")
         ensure_column_pg(conn, "backlogs", "last_prompt_date", "DATE")
         ensure_column_pg(conn, "backlogs", "plan_json", "TEXT")
+        ensure_column_pg(conn, "weekly_timetable", "week_start_date", "DATE")
+        ensure_column_pg(conn, "weekly_timetable", "is_active", "BOOLEAN DEFAULT true")
+
+        ensure_column_pg(conn, "daily_logs", "focus_score", "INT DEFAULT 0")
+        ensure_column_pg(conn, "daily_logs", "total_planned_minutes", "INT DEFAULT 0")
+        ensure_column_pg(conn, "daily_logs", "total_actual_minutes", "INT DEFAULT 0")
+
+        ensure_column_pg(conn, "tasks", "subject_category", "VARCHAR(50)") # OC/IOC/PC
+        ensure_column_pg(conn, "tasks", "priority", "VARCHAR(20) DEFAULT 'medium'")
+        ensure_column_pg(conn, "tasks", "sequence_order", "INT DEFAULT 0")
+        ensure_column_pg(conn, "tasks", "extension_minutes", "INT DEFAULT 0")
+        ensure_column_pg(conn, "tasks", "extension_count", "INT DEFAULT 0")
+        ensure_column_pg(conn, "tasks", "pause_count", "INT DEFAULT 0")
+        ensure_column_pg(conn, "tasks", "paused_at", "TIMESTAMP")
+        ensure_column_pg(conn, "tasks", "is_paused", "BOOLEAN DEFAULT false")
+        ensure_column_pg(conn, "tasks", "actual_end_time", "TIMESTAMP")
+        
         ensure_column_pg(conn, "backlogs", "status", "VARCHAR(50) DEFAULT 'pending'")
+
         
         ensure_column_pg(conn, "medical_leaves", "student_requested", "BOOLEAN DEFAULT false")
         ensure_column_pg(conn, "medical_leaves", "auto_cancel_time", "TIMESTAMP")
@@ -2325,22 +2362,21 @@ def find_student_for_approval(value: str) -> Optional[Dict[str, Any]]:
     c.close()
     return dict(row) if row else None
 
-def upsert_weekly_timetable_row(student_id: str, day_of_week: str, coaching_slots: List[Dict[str, Any]], free_slots: List[Dict[str, Any]], batch_name: Optional[str]):
+def upsert_weekly_timetable_row(student_id: str, day_of_week: str, coaching_slots: List[Dict[str, Any]], free_slots: List[Dict[str, Any]], batch_name: Optional[str], week_start_date: Optional[date] = None):
     c = db(); cur = db_cursor(c)
     cur.execute(
-        """
-        DELETE FROM weekly_timetable WHERE student_id=%s AND day_of_week=%s
-        """,
+        "DELETE FROM weekly_timetable WHERE student_id=%s AND day_of_week=%s",
         (student_id, day_of_week)
     )
     cur.execute(
         """
-        INSERT INTO weekly_timetable (student_id, day_of_week, coaching_slots, free_slots, batch_name, created_at, updated_at)
-        VALUES (%s,%s,%s,%s,%s,now(),now())
+        INSERT INTO weekly_timetable (student_id, day_of_week, coaching_slots, free_slots, batch_name, week_start_date, created_at, updated_at)
+        VALUES (%s,%s,%s,%s,%s,%s,now(),now())
         """,
-        (student_id, day_of_week, json.dumps(coaching_slots), json.dumps(free_slots), batch_name)
+        (student_id, day_of_week, json.dumps(coaching_slots), json.dumps(free_slots), batch_name, week_start_date)
     )
     c.commit(); c.close()
+
 
 def get_weekly_timetable(student_id: str) -> List[Dict[str, Any]]:
     c = db(); cur = db_cursor(c)
@@ -3710,80 +3746,164 @@ async def run_mentorship_cycle(bot):
         except: pass
     c.commit(); c.close()
 
-    # 3. Relative Progress Nudges & Night Summary
     now_ist = datetime.now(IST)
     
-    # 4. Existing Mentorship Logic (Reminders, Reports, etc.)
-    for student in active_students():
-        try:
+    # 3. Sunday Weekly Report Trigger
+    if now_ist.strftime("%A") == "Sunday" and now_ist.hour == 9 and now_ist.minute <= 5:
+        c = db(); cur = db_cursor(c)
+        for student in active_students():
+            # Check if already sent today
             log = get_or_create_daily_log(student["id"], today)
-            created_at = log.get("created_at")
-            
-            if created_at:
-                # Handle both string and datetime types
-                if isinstance(created_at, str):
-                    try:
-                        created_at = datetime.fromisoformat(created_at)
-                    except:
-                        created_at = None
-                
-                if created_at:
-                    # Convert created_at to IST for comparison
-                    if created_at.tzinfo is None:
-                        created_ist = IST.localize(created_at)
-                    else:
-                        created_ist = created_at.astimezone(IST)
+            if not log.get("weekly_report_sent"):
+                await send_weekly_mentorship_summary(bot, student["id"])
+                update_daily_log(log["id"], {"weekly_report_sent": True})
+        c.close()
+    
+                    # --- NEW SCHEDULER & REMINDER LOGIC ---
+                    day_name = now_ist.strftime("%A")
+                    cur.execute("SELECT coaching_slots FROM weekly_timetable WHERE student_id=%s AND day_of_week=%s", (student["id"], day_name))
+                    tt_row = cur.fetchone()
                     
-                    diff_hours = (now_ist - created_ist).total_seconds() / 3600
-                    
-                    # Nudge 1: after 2 hr
-                    if 2 <= diff_hours < 4 and not log.get("nudge_1_sent"):
-                        await bot.send_message(
-                            chat_id=int(student["telegram_id"]),
-                            text=(
-                                "👋 *Quick Check (2hr)*\n"
-                                "━━━━━━━━━━━━━━━━━━━━\n\n"
-                                "Aapke daily planner tasks ka kya status hai? 🤔\n\n"
-                                "Jo complete ho gaye hain, unhe *Mark Done* kar dijiye. It keeps you consistent! 💪\n\n"
-                                "👉 `Show My Self-Study Planner` click karein."
-                            ),
-                            parse_mode="Markdown"
-                        )
-                        update_daily_log(log["id"], {"nudge_1_sent": True})
-                    
-                    # Nudge 2: after 4 hr
-                    elif 4 <= diff_hours < 6 and not log.get("nudge_2_sent"):
-                        await bot.send_message(
-                            chat_id=int(student["telegram_id"]),
-                            text=(
-                                "🔔 *Half-Day Reminder (4hr)*\n"
-                                "━━━━━━━━━━━━━━━━━━━━\n\n"
-                                "Adha din nikal gaya hai! 🕒\n\n"
-                                "Apne planner ko check karein aur pending tasks ko finish karne ka try karein. 📋\n\n"
-                                "Consistency is the key to Kota Success! 🚀"
-                            ),
-                            parse_mode="Markdown"
-                        )
-                        update_daily_log(log["id"], {"nudge_2_sent": True})
-                    
-                    # Nudge 3: after 6 hr
-                    elif 6 <= diff_hours < 7 and not log.get("nudge_3_sent"):
-                        await bot.send_message(
-                            chat_id=int(student["telegram_id"]),
-                            text=(
-                                "🚀 *Final Nudge (6hr)*\n"
-                                "━━━━━━━━━━━━━━━━━━━━\n\n"
-                                "Almost done! Aaj ke bache hue tasks finish karein. ✨\n\n"
-                                "Last stretch mein apna best dein! Target ke aur karib. 🎯"
-                            ),
-                            parse_mode="Markdown"
-                        )
-                        update_daily_log(log["id"], {"nudge_3_sent": True})
-                    
-                    # Night Summary: 1 hr later of last nudge (after 7 hr)
-                    elif diff_hours >= 7 and not log.get("summary_sent"):
-                        await send_daily_planner_summary(bot, student, today)
-                        update_daily_log(log["id"], {"summary_sent": True})
+                    if tt_row and tt_row["coaching_slots"]:
+                        slots = json.loads(tt_row["coaching_slots"]) if isinstance(tt_row["coaching_slots"], str) else tt_row["coaching_slots"]
+                        
+                        if slots:
+                            # Find first and last class times
+                            times = []
+                            for s in slots:
+                                try:
+                                    t_str = s.get("start_time", s.get("time"))
+                                    t_dt = datetime.strptime(t_str, "%I:%M %p").time()
+                                    times.append(t_dt)
+                                except: continue
+                            
+                            if times:
+                                first_class = min(times)
+                                last_class = max(times)
+                                
+                                # 1. Morning Reminder (20 mins before first class)
+                                first_dt = datetime.combine(today, first_class)
+                                first_dt = IST.localize(first_dt)
+                                diff_pre = (first_dt - now_ist).total_seconds() / 60
+                                
+                                if 15 <= diff_pre <= 21 and not log.get("morning_reminder_sent"):
+                                    classes_text = "\n".join([f"• {s.get('subject')}: {s.get('start_time', s.get('time'))}" for s in slots])
+                                    await bot.send_message(
+                                        chat_id=int(student["telegram_id"]),
+                                        text=(
+                                            f"☀️ <b>Good Morning!</b>\n\nAapki coaching classes shuru hone wali hain:\n\n{classes_text}\n\nBest of luck for your sessions! 🚀"
+                                        ),
+                                        parse_mode="HTML"
+                                    )
+                                    update_daily_log(log["id"], {"morning_reminder_sent": True})
+                                
+                                # 2. Post-Coaching Scheduler Trigger (30 mins after last class)
+                                # Assuming class duration is roughly 1.5 - 2 hours if not specified, 
+                                # but for now we trigger based on start time + 2 hours + 30 mins 
+                                # OR better: the user said "class khatam hone ke 30 min baad".
+                                # If we don't have end_time, let's assume 1.5h per class.
+                                estimated_end = datetime.combine(today, last_class) + timedelta(minutes=90)
+                                estimated_end = IST.localize(estimated_end)
+                                diff_post = (now_ist - estimated_end).total_seconds() / 60
+                                
+                                if 30 <= diff_post <= 60 and not log.get("scheduler_prompt_sent"):
+                                    # Check if tasks already exist for today
+                                    cur.execute("SELECT count(*) as cnt FROM tasks WHERE student_id=%s AND scheduled_date=%s", (student["id"], today))
+                                    t_count = cur.fetchone()["cnt"]
+                                    
+                                    if t_count == 0:
+                                        await bot.send_message(
+                                            chat_id=int(student["telegram_id"]),
+                                            text=(
+                                                "🏠 <b>Coaching Over!</b>\n\nAb time hai aaj ki self-study plan karne ka. ✍️\n\n"
+                                                "Niche button dabayein aur apna aaj ka schedule set karein:"
+                                            ),
+                                            reply_markup=ReplyKeyboardMarkup([["Daily Scheduler"], ["Back"]], resize_keyboard=True),
+                                            parse_mode="HTML"
+                                        )
+                                        update_daily_log(log["id"], {"scheduler_prompt_sent": True})
+
+                    # 7. Live Task Timer Updates
+                    cur.execute("SELECT * FROM tasks WHERE student_id=%s AND status='in_progress' AND scheduled_date=%s", (student["id"], today))
+                    active_tasks = cur.fetchall()
+                    for t in active_tasks:
+                        if t.get("is_paused"): 
+                            # Handle Auto-Resume
+                            p_at = t["paused_at"]
+                            if p_at:
+                                if p_at.tzinfo is None: p_at = IST.localize(p_at)
+                                if (now_ist - p_at).total_seconds() / 60 >= 10:
+                                    cur.execute("UPDATE tasks SET is_paused=false, updated_at=now() WHERE id=%s", (t["id"],))
+                                    await bot.send_message(chat_id=int(student["telegram_id"]), text=f"⏰ 10 minute break over! <b>{t['subject']}</b> task resume ho raha hai.", parse_mode="HTML")
+                            continue
+                        
+                        est_end = t["estimated_end_time"]
+                        if est_end:
+                            if est_end.tzinfo is None: est_end = IST.localize(est_end)
+                            remaining_mins = int((est_end - now_ist).total_seconds() / 60)
+                            
+                            if remaining_mins <= 0:
+                                cur.execute("UPDATE tasks SET status='awaiting_status', updated_at=now() WHERE id=%s", (t["id"],))
+                                await bot.send_message(
+                                    chat_id=int(student["telegram_id"]),
+                                    text=f"🔔 <b>Time's up for:</b> {t['subject']}\n\n<i>{t['description']}</i>\n\nKya aapne ye poora kar liya?",
+                                    reply_markup=InlineKeyboardMarkup([
+                                        [InlineKeyboardButton("✅ Yes, Done", callback_data=f"m_done_{t['id']}")],
+                                        [InlineKeyboardButton("⏳ No, Extend 15m", callback_data=f"m_ext_{t['id']}")]
+                                    ]),
+                                    parse_mode="HTML"
+                                )
+                                try: await bot.unpin_chat_message(chat_id=int(student["telegram_id"]), message_id=t["timer_message_id"])
+                                except: pass
+                            else:
+                                # Update timer message (only if needed to reduce rate limits)
+                                try:
+                                    kb = [
+                                        [InlineKeyboardButton("✅ Done Early", callback_data=f"m_done_{t['id']}")],
+                                        [InlineKeyboardButton("⏸ Pause (10m)", callback_data=f"m_pause_{t['id']}"),
+                                         InlineKeyboardButton("⏳ Extend (15m)", callback_data=f"m_ext_{t['id']}")]
+                                    ]
+                                    msg_text = (
+                                        f"🚀 <b>TASK IN PROGRESS</b>\n"
+                                        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                                        f"📖 <b>Subject:</b> {t['subject']}\n"
+                                        f"📝 <b>Task:</b> {t['description']}\n\n"
+                                        f"⏱ <b>Time Remaining:</b> {remaining_mins} mins\n"
+                                        f"🏁 <b>Target End:</b> {est_end.strftime('%I:%M %p')}"
+                                    )
+                                    await bot.edit_message_text(
+                                        chat_id=int(student["telegram_id"]),
+                                        message_id=t["timer_message_id"],
+                                        text=msg_text,
+                                        reply_markup=InlineKeyboardMarkup(kb),
+                                        parse_mode="HTML"
+                                    )
+                                except Exception: pass
+                    c.commit()
+
+                    # --- EXISTING NUDGE LOGIC ---
+                    created_at = log.get("created_at")
+                    if created_at:
+                        if isinstance(created_at, str):
+                            try: created_at = datetime.fromisoformat(created_at)
+                            except: created_at = None
+                        if created_at:
+                            if created_at.tzinfo is None: created_ist = IST.localize(created_at)
+                            else: created_ist = created_at.astimezone(IST)
+                            diff_hours = (now_ist - created_ist).total_seconds() / 3600
+                            if 2 <= diff_hours < 4 and not log.get("nudge_1_sent"):
+                                await bot.send_message(chat_id=int(student["telegram_id"]), text="👋 *Quick Check (2hr)*\n━━━━━━━━━━━━━━━━━━━━\n\nAapke daily planner tasks ka kya status hai? 🤔", parse_mode="Markdown")
+                                update_daily_log(log["id"], {"nudge_1_sent": True})
+                            elif 4 <= diff_hours < 6 and not log.get("nudge_2_sent"):
+                                await bot.send_message(chat_id=int(student["telegram_id"]), text="🔔 *Half-Day Reminder (4hr)*\n━━━━━━━━━━━━━━━━━━━━\n\nAdha din nikal gaya hai! 🕒", parse_mode="Markdown")
+                                update_daily_log(log["id"], {"nudge_2_sent": True})
+                            elif 6 <= diff_hours < 7 and not log.get("nudge_3_sent"):
+                                await bot.send_message(chat_id=int(student["telegram_id"]), text="🚀 *Final Nudge (6hr)*\n━━━━━━━━━━━━━━━━━━━━\n\nAlmost done! Aaj ke bache hue tasks finish karein. ✨", parse_mode="Markdown")
+                                update_daily_log(log["id"], {"nudge_3_sent": True})
+                            elif diff_hours >= 7 and not log.get("summary_sent"):
+                                await send_daily_planner_summary(bot, student, today)
+                                update_daily_log(log["id"], {"summary_sent": True})
+
 
             await process_backlog_delivery(bot, student)
         except Exception as e:
@@ -4128,57 +4248,60 @@ async def send_backlog_day_plan(bot, student: Dict[str, Any], backlog: Dict[str,
     u = get_user(int(student["telegram_id"]))
     if u:
         temp = get_mentorship_temp(u)
-        temp["backlog_help_request"] = {
-            "backlog_id": backlog["id"],
-            "day_number": day_number,
-        }
-        save_mentorship_temp(int(student["telegram_id"]), temp)
-    await bot.send_message(
-        chat_id=int(student["telegram_id"]),
-        text="Need help completing this task?\n\nChoose an option below:",
-        reply_markup=ReplyKeyboardMarkup(BACKLOG_HELP_OPTIONS, resize_keyboard=True)
-    )
-
-async def send_daily_planner_summary(bot, student: Dict[str, Any], date_val: date):
+ async def send_daily_planner_summary(bot, student: Dict[str, Any], date_val: date):
     tasks = get_student_tasks(student["id"], scheduled_date=date_val)
-    if not tasks:
-        return
+    if not tasks: return
     
-    completed = [t for t in tasks if t["status"] == "done"]
-    pending = [t for t in tasks if t["status"] == "pending"]
-    total = len(tasks)
+    # Split into Daily vs Backlog
+    daily_tasks = [t for t in tasks if t.get("source") == "MANUAL_SCHEDULER"]
+    backlog_tasks = [t for t in tasks if t.get("source") == "BACKLOG" or t.get("type") == "BACKLOG"]
     
-    if total == 0: return
-
-    msg = f"📊 *DAILY PROGRESS SUMMARY*\n"
+    msg = f"📊 <b>DAILY MASTER SUMMARY</b>\n"
     msg += f"📅 Date: {date_val.strftime('%d %b %Y')}\n"
     msg += "━━━━━━━━━━━━━━━━━━━━\n\n"
-    msg += f"✅ *Completed:* {len(completed)}/{total}\n"
-    msg += f"⏳ *Pending:* {len(pending)}/{total}\n"
-    msg += "━━━━━━━━━━━━━━━━━━━━\n\n"
     
-    if pending:
-        msg += "📌 *Pending Tasks:*\n"
-        for t in pending:
-            short_id = str(t["id"])[:4]
-            msg += f"• `{short_id}`: {t.get('subject')} - {t.get('topic')}\n"
-        msg += "\n💡 *To Mark Done:* Type `done [ID]`"
-    else:
-        msg += "🎉 *CONGRATULATIONS!*\n\nAapne aaj ke saare tasks complete kar liye hain. Your dedication is inspiring! 🚀"
+    if daily_tasks:
+        done = len([t for t in daily_tasks if t["status"] == "done"])
+        msg += f"📖 <b>Regular Study (HW & Revision):</b>\n"
+        msg += f"✅ Completed: {done}/{len(daily_tasks)}\n"
+        for t in daily_tasks:
+            icon = "✅" if t["status"] == "done" else "⭕"
+            msg += f"  {icon} {t['subject']}\n"
+        msg += "\n"
+
+    if backlog_tasks:
+        done_bl = len([t for t in backlog_tasks if t["status"] == "done"])
+        msg += f"🔁 <b>Backlog Coverage (Extra):</b>\n"
+        msg += f"✅ Completed: {done_bl}/{len(backlog_tasks)}\n"
+        for t in backlog_tasks:
+            icon = "✅" if t["status"] == "done" else "⭕"
+            msg += f"  {icon} {t['topic'] or t['subject']}\n"
+        msg += "\n"
+
+    total_done = len([t for t in tasks if t["status"] == "done"])
+    eff = int((total_done / len(tasks)) * 100)
+    msg += f"📊 <b>Overall Efficiency:</b> {eff}%\n"
     
+    if eff == 100: msg += "🌟 Outstanding! You finished everything. 🔥"
+    elif eff >= 70: msg += "💪 Great progress. Keep it up!"
+    else: msg += "⚠️ Discipline badhaiye. Kal behtar karna hai."
+
     try:
-        await bot.send_message(chat_id=int(student["telegram_id"]), text=msg, parse_mode="Markdown")
+        await bot.send_message(chat_id=int(student["telegram_id"]), text=msg, parse_mode="HTML")
         
         # Send copy to parent if verified
         if student.get("parent_telegram_id") and student.get("parent_verified"):
             try:
                 child_name = student.get("name", "Student")
-                parent_msg = f"🛡️ *PARENT REPORT* ({child_name})\n━━━━━━━━━━━━━━━━━━━━\n\n{msg}"
-                await bot.send_message(chat_id=int(student["parent_telegram_id"]), text=parent_msg, parse_mode="Markdown")
+                parent_lang = student.get("parent_preferred_language", "Hindi")
+                # Translation logic (simple or via AI)
+                parent_msg = f"🛡️ <b>CHILD PROGRESS REPORT</b> ({child_name})\n━━━━━━━━━━━━━━━━━━━━\n\n{msg}"
+                await bot.send_message(chat_id=int(student["parent_telegram_id"]), text=parent_msg, parse_mode="HTML")
             except Exception as pe:
                 logger.error(f"Failed to send summary to parent of {student['id']}: {pe}")
     except Exception as e:
         logger.error(f"Failed to send daily summary to {student['id']}: {e}")
+
 
 async def send_child_progress_to_parent(update, context, student):
     tasks = get_student_tasks(student["id"], scheduled_date=today_ist_date())
@@ -4204,7 +4327,213 @@ async def send_child_progress_to_parent(update, context, student):
     await update.message.reply_text(msg, parse_mode="HTML")
 
 
+
+async def start_next_task(bot, student_id):
+    """Starts the next pending task for the student"""
+    today = today_ist_date()
+    c = db(); cur = db_cursor(c)
+    cur.execute(
+        "SELECT * FROM tasks WHERE student_id=%s AND scheduled_date=%s AND status='pending' ORDER BY sequence_order LIMIT 1",
+        (student_id, today)
+    )
+    task = cur.fetchone()
+    if not task:
+        c.close()
+        return False
+    
+    now = datetime.now(IST)
+    end_time = now + timedelta(minutes=task["allotted_minutes"])
+    
+    cur.execute(
+        "UPDATE tasks SET status='in_progress', start_time=%s, estimated_end_time=%s, updated_at=now() WHERE id=%s",
+        (now, end_time, task["id"])
+    )
+    c.commit(); c.close()
+    
+    student = get_student(student_id)
+    kb = [
+        [InlineKeyboardButton("✅ Done Early", callback_data=f"m_done_{task['id']}")],
+        [InlineKeyboardButton("⏸ Pause (10m)", callback_data=f"m_pause_{task['id']}"),
+         InlineKeyboardButton("⏳ Extend (15m)", callback_data=f"m_ext_{task['id']}")]
+    ]
+    
+    msg_text = (
+        f"🚀 <b>TASK STARTED</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📖 <b>Subject:</b> {task['subject']}\n"
+        f"📝 <b>Task:</b> {task['description']}\n\n"
+        f"⏱ <b>Time Remaining:</b> {task['allotted_minutes']} mins\n"
+        f"🏁 <b>Target End:</b> {end_time.strftime('%I:%M %p')}"
+    )
+    
+    try:
+        msg = await bot.send_message(
+            chat_id=int(student["telegram_id"]),
+            text=msg_text,
+            reply_markup=InlineKeyboardMarkup(kb),
+            parse_mode="HTML"
+        )
+        c = db(); cur = db_cursor(c)
+        cur.execute("UPDATE tasks SET timer_message_id=%s WHERE id=%s", (msg.message_id, task["id"]))
+        c.commit(); c.close()
+        await bot.pin_chat_message(chat_id=int(student["telegram_id"]), message_id=msg.message_id)
+    except: pass
+    return True
+
+async def handle_mentorship_callbacks(update: Update, context: ContextTypes.DEFAULT_HANDLER):
+    query = update.callback_query
+    data = query.data
+    uid = query.from_user.id
+    student = get_student_by_telegram(uid)
+    if not student: return
+    
+    if data.startswith("m_done_"):
+        task_id = int(data.split("_")[2])
+        c = db(); cur = db_cursor(c)
+        cur.execute("UPDATE tasks SET status='done', actual_end_time=now(), updated_at=now() WHERE id=%s", (task_id,))
+        c.commit(); c.close()
+        
+        await query.answer("Great job! Task complete. 🌟")
+        await query.edit_message_text(f"✅ <b>Task Completed!</b>\n\nMoving to the next task in your schedule...", parse_mode="HTML")
+        try: await context.bot.unpin_chat_message(chat_id=uid, message_id=query.message.message_id)
+        except: pass
+        await start_next_task(context.bot, student["id"])
+
+    elif data.startswith("m_pause_"):
+        task_id = int(data.split("_")[2])
+        c = db(); cur = db_cursor(c)
+        cur.execute("SELECT * FROM tasks WHERE id=%s", (task_id,))
+        task = cur.fetchone()
+        if task["pause_count"] >= 1:
+            await query.answer("⚠️ Aap sirf ek baar pause le sakte hain per task.", show_alert=True)
+            c.close(); return
+        new_end = task["estimated_end_time"] + timedelta(minutes=10)
+        cur.execute("UPDATE tasks SET is_paused=true, paused_at=now(), pause_count=pause_count+1, estimated_end_time=%s WHERE id=%s", (new_end, task_id))
+        c.commit(); c.close()
+        await query.answer("⏸ 10 mins break started.")
+        await query.edit_message_text(f"⏸ <b>TASK PAUSED (10m Break)</b>\n\nTask: {task['description']}\n\nResuming automatically soon...", parse_mode="HTML")
+
+    elif data.startswith("m_ext_"):
+        task_id = int(data.split("_")[2])
+        c = db(); cur = db_cursor(c)
+        cur.execute("SELECT * FROM tasks WHERE id=%s", (task_id,))
+        task = cur.fetchone()
+        if task["extension_count"] >= 2:
+            await query.answer("⚠️ Max 2 extensions allowed.", show_alert=True)
+            c.close(); return
+        new_end = task["estimated_end_time"] + timedelta(minutes=15)
+        cur.execute("UPDATE tasks SET extension_minutes=extension_minutes+15, extension_count=extension_count+1, estimated_end_time=%s WHERE id=%s", (new_end, task_id))
+        
+        # Smart Shift: Shift all subsequent pending tasks for today
+        cur.execute(
+            "UPDATE tasks SET estimated_end_time = estimated_end_time + INTERVAL '15 minutes' "
+            "WHERE student_id=%s AND scheduled_date=%s AND status='pending' AND sequence_order > %s",
+            (student["id"], today_ist_date(), task["sequence_order"])
+        )
+        
+        c.commit(); c.close()
+        await query.answer("⏳ 15 minutes added and schedule shifted! 👍")
+
+async def send_weekly_mentorship_summary(bot, student_id):
+    """Generates and sends a consolidated report for the last 6 days (Mon-Sat) on Sunday morning"""
+    student = get_student(student_id)
+    if not student: return
+    
+    today = today_ist_date()
+    start_date = today - timedelta(days=6) # Monday to Saturday
+    
+    c = db(); cur = db_cursor(c)
+    # Aggregate data
+    cur.execute("""
+        SELECT 
+            subject,
+            count(*) as total_tasks,
+            count(*) FILTER (WHERE status='done') as completed_tasks,
+            sum(allotted_minutes) as total_planned,
+            sum(actual_end_time - start_time) as actual_duration,
+            sum(extension_count) as total_extensions
+        FROM tasks 
+        WHERE student_id=%s AND scheduled_date BETWEEN %s AND %s
+        GROUP BY subject
+    """, (student_id, start_date, today - timedelta(days=1)))
+    stats = cur.fetchall()
+    
+    if not stats:
+        c.close(); return # No data for the week
+        
+    total_comp = sum(s["completed_tasks"] for s in stats)
+    total_all = sum(s["total_tasks"] for s in stats)
+    total_ext = sum(s["total_extensions"] for s in stats)
+    
+    msg = f"📊 <b>WEEKLY MEGA-REPORT</b>\n"
+    msg += f"📅 {start_date.strftime('%d %b')} - {(today - timedelta(days=1)).strftime('%d %b')}\n"
+    msg += "━━━━━━━━━━━━━━━━━━━━\n\n"
+    
+    for s in stats:
+        perc = (s["completed_tasks"] / s["total_tasks"]) * 100 if s["total_tasks"] > 0 else 0
+        msg += f"🔹 <b>{s['subject']}:</b> {s['completed_tasks']}/{s['total_tasks']} ({int(perc)}%)\n"
+        if s["total_extensions"] > 0:
+            msg += f"   └ <i>Extensions: {s['total_extensions']} times</i>\n"
+            
+    msg += f"\n✅ <b>Overall Completion:</b> {total_comp}/{total_all}\n"
+    
+    # Discipline Score logic
+    discipline_score = max(0, 100 - (total_ext * 5))
+    msg += f"🔥 <b>Discipline Score:</b> {discipline_score}/100\n"
+    
+    if discipline_score >= 90: msg += "✨ Fantastic consistency! Kota is proud of you. 🚀"
+    elif discipline_score >= 70: msg += "👍 Good effort, but try to reduce extensions."
+    else: msg += "⚠️ Discipline ki zaroorat hai. Agle hafte better plan karein."
+    
+    # Send to Student
+    try: await bot.send_message(chat_id=int(student["telegram_id"]), text=msg, parse_mode="HTML")
+    except: pass
+    
+    # Send to Parent (with translation)
+    parent_id = student.get("parent_telegram_id")
+    if parent_id:
+        parent_lang = student.get("parent_preferred_language", "Hindi")
+        try:
+            translation_prompt = f"Translate this student progress report to {parent_lang}. Keep it encouraging for the parent. Report:\n{msg}"
+            translated_msg = call_claude(translation_prompt) # Assuming helper for Claude exists
+            await bot.send_message(chat_id=int(parent_id), text=f"👨‍👩‍👧‍👦 <b>Weekly Report (Translated):</b>\n\n{translated_msg}", parse_mode="HTML")
+        except:
+            # Fallback to original if translation fails
+            await bot.send_message(chat_id=int(parent_id), text=f"👨‍👩‍👧‍👦 <b>Weekly Report:</b>\n\n{msg}", parse_mode="HTML")
+    
+    c.close()
+
+async def handle_view_backlogs(update: Update, context: ContextTypes.DEFAULT_HANDLER):
+    uid = update.effective_user.id
+    student = get_student_by_telegram(uid)
+    if not student: return
+    
+    c = db(); cur = db_cursor(c)
+    cur.execute("SELECT * FROM backlogs WHERE student_id=%s ORDER BY created_at DESC", (student["id"],))
+    backlogs = cur.fetchall()
+    c.close()
+    
+    if not backlogs:
+        await update.message.reply_text("Abhi aapka koi backlog record nahi hai. Add karne ke liye 'Add Backlogs' dabayein.")
+        return
+        
+    msg = "📂 <b>YOUR REGISTERED BACKLOGS</b>\n"
+    msg += "━━━━━━━━━━━━━━━━━━━━\n\n"
+    
+    for i, b in enumerate(backlogs, 1):
+        status_icon = "⏳" if b["status"] == "pending" else "🚀" if b["status"] == "in_progress" else "✅"
+        msg += f"{i}. <b>{b['topic']}</b> ({b['subject']})\n"
+        msg += f"   └ Status: {status_icon} {b['status'].capitalize()}\n"
+        if b.get("total_days"):
+            msg += f"   └ Plan: {b['total_days']} Days\n"
+        msg += "\n"
+        
+    await update.message.reply_text(msg, parse_mode="HTML")
+
 async def process_backlog_delivery(bot, student: Dict[str, Any]):
+
+
+
     now_dt = today_ist()
     today = now_dt.date()
     backlogs = get_backlogs(student["id"], ["pending", "in_progress"])
@@ -5207,112 +5536,62 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
                 "📚 *BACKLOGS COVERAGE*\n"
                 "━━━━━━━━━━━━━━━━━━━━\n\n"
                 "Purane pending topics ko systematically cover karne ke liye ready hain? ✨\n\n"
-                "Kya aap abhi koi backlog add karna chahte hain?", 
-                reply_markup=ReplyKeyboardMarkup([["Yes", "No"], ["Back"]], resize_keyboard=True), 
+                "Niche diye gaye options mein se chunein:", 
+                reply_markup=ReplyKeyboardMarkup([["Add Backlog", "View Backlogs"], ["Back"]], resize_keyboard=True), 
                 parse_mode="Markdown"
             )
         elif text == "Daily Scheduler":
-            upd_user(uid, {"step": "mentor_scheduler_date"})
+            upd_user(uid, {"step": "mentor_scheduler_subject"})
+            temp = get_mentorship_temp(u)
+            temp["scheduler_tasks"] = [] # Clear old temp tasks
+            save_mentorship_temp(uid, temp)
             await update.message.reply_text(
-                "📝 *DAILY SCHEDULER (Manual)*\n"
-                "━━━━━━━━━━━━━━━━━━━━\n\n"
-                "Manual plan banane ke liye date enter karein (DD/MM/YYYY):", 
-                reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True), 
-                parse_mode="Markdown"
+                "📝 <b>DAILY SCHEDULER (Manual)</b>\n\nEk-ek karke apne aaj ke tasks add karein.\n\n<b>Subject select karein:</b>",
+                reply_markup=ReplyKeyboardMarkup(SCHEDULER_SUBJECT_OPTIONS, resize_keyboard=True),
+                parse_mode="HTML"
             )
         elif text == "Show My Self-Study Planner":
-            # Show the planner list directly from main dashboard
             tasks = get_student_tasks(student["id"], scheduled_date=today_ist_date())
             if not tasks:
-                await update.message.reply_text("❌ Aapka aaj ka koi plan nahi mil raha. Naya plan generate karein?", reply_markup=ReplyKeyboardMarkup([["Daily Planner"], ["Backlogs"]], resize_keyboard=True))
+                await update.message.reply_text("❌ Aapka aaj ka koi plan nahi mil raha. Naya plan banane ke liye 'Daily Scheduler' dabayein.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True))
             else:
-                msg = f"📋 *TODAY'S PLANNER*\n"
+                msg = f"📋 <b>YOUR SELF-STUDY PLANNER</b>\n"
                 msg += f"📅 Date: {today_ist_date().strftime('%d %b %Y')}\n"
                 msg += "━━━━━━━━━━━━━━━━━━━━\n\n"
-                emoji_map = {"HW": "📝", "REVISION": "📖", "BACKLOG": "🔁", "PENDING": "⏳", "OTHER": "📌", "CLASS": "🏫"}
+                
+                # Sort tasks by sequence_order or scheduled_at
                 for t in tasks:
-                    status_emoji = "✅" if t["status"] == "done" else "⭕"
-                    type_emoji = emoji_map.get(t["type"], "📝")
-                    short_id = str(t["id"])[:4]
-                    msg += f"{status_emoji} {type_emoji} `{short_id}`: *{t['subject']}*\n"
-                    msg += f"└ {t['topic']}\n\n"
+                    status_icon = "✅" if t["status"] == "done" else "⭕"
+                    type_label = "🔁 Backlog" if t.get("source") == "BACKLOG" else "📖 Daily"
+                    msg += f"{status_icon} <b>{t['subject']}</b> ({type_label})\n"
+                    msg += f"   └ {t['description']}\n"
+                    if t.get("allotted_minutes"):
+                        msg += f"   ⏱ Time: {t['allotted_minutes']} mins\n"
+                    msg += "\n"
+                
                 msg += "━━━━━━━━━━━━━━━━━━━━\n"
-                msg += "💡 *To Mark Done:* Type `done [ID]`"
-                await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_TABS_KB, resize_keyboard=True))
-        elif text == "Daily Planner":
-            # Show the Planner Sub-Menu instead of jumping to date entry
-            upd_user(uid, {"step": "mentor_planner_ready"})
-            await update.message.reply_text(
-                "📅 *DAILY STUDY PLANNER*\n"
-                "━━━━━━━━━━━━━━━━━━━━\n\n"
-                "Aap yahan se apna aaj ka plan dekh sakte hain ya naya plan generate kar sakte hain. 🚀\n\n"
-                "Niche diye gaye options mein se chunein:",
-                reply_markup=ReplyKeyboardMarkup(TAB2_PLANNER_OPTS_KB, resize_keyboard=True),
-                parse_mode="Markdown"
-            )
-        elif text == "Generate My Daily Plan":
-            # Direct jump to generation flow
-            upd_user(uid, {"step": "mentor_planner_date"})
-            await update.message.reply_text(
-                "📅 *DAILY STUDY PLANNER*\n"
-                "━━━━━━━━━━━━━━━━━━━━\n\n"
-                "Aaj ka schedule optimize karne ke liye AI aapke timetable aur homework ka use karega! 🚀\n\n"
-                "📅 *Kis date ke liye plan generate karna hai?*\n"
-                "Format: DD/MM/YYYY (Example: 30/04/2026)", 
-                reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True), 
-                parse_mode="Markdown"
-            )
-        return True
-
-    # TAB 2: PLANNER MENU (Sub-menu after clicking Daily Planner)
-    if step == "mentor_planner_ready":
-        if text == "Generate My Daily Plan":
-            upd_user(uid, {"step": "mentor_planner_date"})
-            await update.message.reply_text(
-                "📅 *Kis date ke liye plan generate karna hai?*\n"
-                "Format: DD/MM/YYYY (Example: 30/04/2026)", 
-                reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True), 
-                parse_mode="Markdown"
-            )
-        elif text == "Show My Self-Study Planner":
-            # Call the existing Show My Self-Study Planner logic
-            tasks = get_student_tasks(student["id"], scheduled_date=today_ist_date())
-            if not tasks:
-                await update.message.reply_text("❌ Aapka aaj ka koi plan nahi mil raha. Naya plan generate karein?", reply_markup=ReplyKeyboardMarkup([["Generate My Daily Plan"], ["Back"]], resize_keyboard=True))
-            else:
-                msg = f"📋 *TODAY'S PLANNER*\n"
-                msg += f"📅 Date: {today_ist_date().strftime('%d %b %Y')}\n"
-                msg += "━━━━━━━━━━━━━━━━━━━━\n\n"
-                emoji_map = {"HW": "📝", "REVISION": "📖", "BACKLOG": "🔁", "PENDING": "⏳", "OTHER": "📌", "CLASS": "🏫"}
-                for t in tasks:
-                    status_emoji = "✅" if t["status"] == "done" else "⭕"
-                    type_emoji = emoji_map.get(t["type"], "📝")
-                    short_id = str(t["id"])[:4]
-                    msg += f"{status_emoji} {type_emoji} `{short_id}`: *{t['subject']}*\n"
-                    msg += f"└ {t['topic']}\n\n"
-                msg += "━━━━━━━━━━━━━━━━━━━━\n"
-                msg += "💡 *To Mark Done:* Type `done [ID]`"
-                await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=ReplyKeyboardMarkup(TAB2_PLANNER_OPTS_KB, resize_keyboard=True))
-        elif text == "Switch to Backlogs":
-            upd_user(uid, {"step": "mentor_backlog_ready"})
-            await update.message.reply_text("📚 *BACKLOGS COVERAGE*\n\nReady to add backlog?", reply_markup=ReplyKeyboardMarkup([["Yes", "No"], ["Back"]], resize_keyboard=True), parse_mode="Markdown")
+                msg += "💡 <i>Bot automatic aapko timer bhejta rahega!</i>"
+                await update.message.reply_text(msg, parse_mode="HTML", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True))
         elif text == "Back":
             await mentorship(update, context)
         return True
 
+
     # TAB 1: BACKLOGS FLOW
     if step == "mentor_backlog_ready":
-        if text == "Yes":
+        if text == "Add Backlog":
             upd_user(uid, {"step": "mentor_backlog_share"})
             await update.message.reply_text("Enter Subject - Backlog Share:\nExample: Biology - Chapter 5,6,7 (Photosynthesis & Respiration)", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True))
-        else:
+        elif text == "View Backlogs":
+            await handle_view_backlogs(update, context)
+        elif text == "Back":
             await mentorship(update, context)
         return True
 
     if step == "mentor_backlog_share":
         if text == "Back":
             upd_user(uid, {"step": "mentor_backlog_ready"})
-            await update.message.reply_text("Ready to add backlog?", reply_markup=ReplyKeyboardMarkup([["Yes", "No"], ["Back"]], resize_keyboard=True))
+            await update.message.reply_text("Ready to manage backlogs?", reply_markup=ReplyKeyboardMarkup([["Add Backlog", "View Backlogs"], ["Back"]], resize_keyboard=True))
             return True
         temp.setdefault("backlog_data", {})["share"] = text
         save_mentorship_temp(uid, temp)
@@ -5484,268 +5763,131 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
             await update.message.reply_text(
                 "📅 *DAILY STUDY PLANNER*\n"
                 "━━━━━━━━━━━━━━━━━━━━\n\n"
-                "Planner section mein aapka swagat hai! 👋\n\n"
-                "Niche diye gaye options mein se chunein:",
-                reply_markup=ReplyKeyboardMarkup(TAB2_PLANNER_OPTS_KB, resize_keyboard=True),
-                parse_mode="Markdown"
-            )
-        elif text == "Back One Step":
-            upd_user(uid, {"step": "mentor_backlog_start"})
-            await update.message.reply_text("Backlog aaj se start karna hai ya next day se?", reply_markup=ReplyKeyboardMarkup(BACKLOG_START_OPTIONS, resize_keyboard=True))
-        elif text == "Back":
-            upd_user(uid, {"step": "mentor_backlog_start"})
-            await update.message.reply_text("Backlog aaj se start karna hai ya next day se?", reply_markup=ReplyKeyboardMarkup(BACKLOG_START_OPTIONS, resize_keyboard=True))
-        elif re.fullmatch(r"\d+", text):
-            temp.setdefault("backlog_data", {})["completion_days"] = int(text)
-            save_mentorship_temp(uid, temp)
-            upd_user(uid, {"step": "mentor_backlog_time"})
-            await update.message.reply_text(
-                "Is backlog ko din me kis time prefer karoge?\nExample: 9 PM or 5 AM\nAgar sure nahi ho to Skip.",
-                reply_markup=ReplyKeyboardMarkup(BACKLOG_TIME_OPTIONS, resize_keyboard=True)
-            )
-        else:
-            await update.message.reply_text(
-                "Choose one option below.",
-                reply_markup=ReplyKeyboardMarkup(TAB1_BACKLOG_OPTS_KB, resize_keyboard=True)
+                "Niche diye gaye options mein se chune:",
+                reply_markup=ReplyKeyboardMarkup([["Back", "Ask Doubt"]], resize_keyboard=True),
+                parse_mode="HTML"
             )
         return True
 
     # --- DAILY SCHEDULER (MANUAL) FLOW ---
-    if step == "mentor_scheduler_date":
+    if step == "mentor_scheduler_subject":
         if text == "Back": await mentorship(update, context); return True
-        try:
-            target_dt = datetime.strptime(text, "%d/%m/%Y").date()
-            temp.setdefault("scheduler_data", {})["date"] = text
-            save_mentorship_temp(uid, temp)
-            upd_user(uid, {"step": "mentor_scheduler_timetable"})
-            await update.message.reply_text(
-                "Enter class start time with AM/PM (Subject - Time)\n\nExample:\nBiology - 09:00 AM\nChemistry - 11:30 AM",
-                reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True)
-            )
-        except:
-            await update.message.reply_text("❌ Invalid format. Use DD/MM/YYYY.")
-        return True
-
-    if step == "mentor_scheduler_timetable":
-        if text == "Back": upd_user(uid, {"step": "mentor_scheduler_date"}); return True
-        classes = []
-        for line in text.split("\n"):
-            if "-" in line:
-                sub, tm = line.split("-", 1)
-                classes.append({"subject": sub.strip(), "time": tm.strip()})
+        # Extract category if it's Chemistry
+        cat = None
+        main_sub = text
+        if "Chemistry (" in text:
+            main_sub = "Chemistry"
+            cat = text.split("(")[1].replace(")", "")
         
-        if not classes:
-            await update.message.reply_text("❌ Sahi format mein classes enter karein (e.g. Physics - 10:00 AM)")
-            return True
-        
-        temp["scheduler_data"]["classes"] = classes
-        temp["scheduler_data"]["current_index"] = 0
-        temp["scheduler_data"]["tasks_to_save"] = []
+        temp["scheduler_current_task"] = {"subject": main_sub, "category": cat}
         save_mentorship_temp(uid, temp)
         
-        first_sub = classes[0]["subject"]
-        upd_user(uid, {"step": "mentor_scheduler_plan"})
-        await update.message.reply_text(f"📝 *Subject:* {first_sub}\n\nIss subject ke liye aapka aaj ka plan kya hai?", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True))
-        return True
-
-    if step == "mentor_scheduler_plan":
-        if text == "Back": upd_user(uid, {"step": "mentor_scheduler_timetable"}); return True
-        idx = temp["scheduler_data"]["current_index"]
-        classes = temp["scheduler_data"]["classes"]
-        
-        # Save plan
-        temp["scheduler_data"]["last_plan"] = text
-        save_mentorship_temp(uid, temp)
-        
-        upd_user(uid, {"step": "mentor_scheduler_material"})
-        await update.message.reply_text(f"📚 Iss class ke liye kaunsa material required hai?", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True))
-        return True
-
-    if step == "mentor_scheduler_material":
-        if text == "Back": upd_user(uid, {"step": "mentor_scheduler_plan"}); return True
-        temp.setdefault("scheduler_data", {})["last_material"] = text
-        save_mentorship_temp(uid, temp)
-        upd_user(uid, {"step": "mentor_scheduler_time_allotted"})
+        upd_user(uid, {"step": "mentor_scheduler_task_detail"})
         await update.message.reply_text(
-            "⏱️ *Time Allotted:*\n\nIs task ke liye kitna time allot karna hai?\nExample: 60 mins", 
-            reply_markup=ReplyKeyboardMarkup([["30 mins", "45 mins", "60 mins"], ["90 mins", "120 mins", "Back"]], resize_keyboard=True),
-            parse_mode="Markdown"
+            f"📝 <b>Subject:</b> {text}\n\nAaj isme aap kya karne wale hain? (Ek line mein likhein)\n\n<i>Example: 15 min revision then 45 min questions.</i>",
+            reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True),
+            parse_mode="HTML"
         )
         return True
 
-    if step == "mentor_scheduler_time_allotted":
-        if text == "Back": upd_user(uid, {"step": "mentor_scheduler_material"}); return True
+    if step == "mentor_scheduler_task_detail":
+        if text == "Back":
+            upd_user(uid, {"step": "mentor_scheduler_subject"})
+            await update.message.reply_text("Subject select karein:", reply_markup=ReplyKeyboardMarkup(SCHEDULER_SUBJECT_OPTIONS, resize_keyboard=True))
+            return True
+        
+        temp["scheduler_current_task"]["description"] = text
+        save_mentorship_temp(uid, temp)
+        
+        upd_user(uid, {"step": "mentor_scheduler_time"})
+        await update.message.reply_text(
+            "⏱️ Is task ke liye kitna time (minutes mein) allot karna hai?\n\nExample: 60",
+            reply_markup=ReplyKeyboardMarkup([["30", "45", "60"], ["90", "120", "Back"]], resize_keyboard=True)
+        )
+        return True
+
+    if step == "mentor_scheduler_time":
+        if text == "Back":
+            upd_user(uid, {"step": "mentor_scheduler_task_detail"})
+            await update.message.reply_text("Task detail firse likhein:", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True))
+            return True
+        
         try:
             mins = int(re.sub(r"\D", "", text))
+            temp["scheduler_current_task"]["minutes"] = mins
+            save_mentorship_temp(uid, temp)
+            
+            upd_user(uid, {"step": "mentor_scheduler_priority"})
+            await update.message.reply_text(
+                "🚩 Is task ki priority kya hai?",
+                reply_markup=ReplyKeyboardMarkup(PRIORITY_OPTIONS, resize_keyboard=True)
+            )
         except:
-            await update.message.reply_text("❌ Kripya minutes mein time enter karein (e.g. 60).")
-            return True
-        temp.setdefault("scheduler_data", {})["last_time_allotted"] = mins
-        save_mentorship_temp(uid, temp)
-        upd_user(uid, {"step": "mentor_scheduler_priority"})
-        await update.message.reply_text(
-            "🚩 *Priority:*\n\nIss task ki priority kya hai?", 
-            reply_markup=ReplyKeyboardMarkup([["High", "Medium", "Low"], ["Back"]], resize_keyboard=True),
-            parse_mode="Markdown"
-        )
+            await update.message.reply_text("❌ Kripya valid number (minutes) enter karein.")
         return True
 
     if step == "mentor_scheduler_priority":
-        if text == "Back": upd_user(uid, {"step": "mentor_scheduler_time_allotted"}); return True
-        if text not in ["High", "Medium", "Low"]:
-            await update.message.reply_text("❌ Niche diye gaye options mein se priority chunein.", reply_markup=ReplyKeyboardMarkup([["High", "Medium", "Low"], ["Back"]], resize_keyboard=True))
+        if text == "Back":
+            upd_user(uid, {"step": "mentor_scheduler_time"})
+            await update.message.reply_text("Minutes enter karein:", reply_markup=ReplyKeyboardMarkup([["30", "45", "60"], ["90", "120", "Back"]], resize_keyboard=True))
             return True
         
-        idx = temp["scheduler_data"]["current_index"]
-        classes = temp["scheduler_data"]["classes"]
-        current_class = classes[idx]
+        if text not in ["High", "Medium", "Low"]:
+            await update.message.reply_text("Kripya menu se priority chunein.")
+            return True
+
+        task = temp["scheduler_current_task"]
+        task["priority"] = text
         
-        # Add to tasks to save
-        temp["scheduler_data"]["tasks_to_save"].append({
-            "subject": current_class["subject"],
-            "topic": f"Plan: {temp['scheduler_data']['last_plan']} | Material: {temp['scheduler_data']['last_material']}",
-            "type": "CLASS",
-            "scheduled_at": current_class["time"],
-            "allotted_minutes": temp["scheduler_data"]["last_time_allotted"],
-            "priority": text.lower(),
-            "source": "MANUAL_SCHEDULER"
-        })
+        # Add to the list of tasks to be saved
+        if "scheduler_tasks" not in temp: temp["scheduler_tasks"] = []
+        temp["scheduler_tasks"].append(task)
+        temp.pop("scheduler_current_task", None)
+        save_mentorship_temp(uid, temp)
         
-        idx += 1
-        temp["scheduler_data"]["current_index"] = idx
+        upd_user(uid, {"step": "mentor_scheduler_confirm"})
+        await update.message.reply_text(
+            f"✅ Task saved! Abhi tak aapne {len(temp['scheduler_tasks'])} tasks add kiye hain.\n\nKya aap koi aur subject add karna chahte hain?",
+            reply_markup=ReplyKeyboardMarkup([["Add Next Subject", "Finish & Start Scheduler"], ["Back"]], resize_keyboard=True)
+        )
+        return True
+
+    if step == "mentor_scheduler_confirm":
+        if text == "Add Next Subject":
+            upd_user(uid, {"step": "mentor_scheduler_subject"})
+            await update.message.reply_text("Next subject select karein:", reply_markup=ReplyKeyboardMarkup(SCHEDULER_SUBJECT_OPTIONS, resize_keyboard=True))
+            return True
         
-        if idx < len(classes):
-            next_sub = classes[idx]["subject"]
-            save_mentorship_temp(uid, temp)
-            upd_user(uid, {"step": "mentor_scheduler_plan"})
-            await update.message.reply_text(f"📝 *Subject:* {next_sub}\n\nIss subject ke liye aapka aaj ka plan kya hai?", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True), parse_mode="Markdown")
-        else:
-            # Finish Scheduler
-            target_date = datetime.strptime(temp["scheduler_data"]["date"], "%d/%m/%Y").date()
-            log = get_or_create_daily_log(student["id"], target_date)
-            for t in temp["scheduler_data"]["tasks_to_save"]:
+        if text == "Finish & Start Scheduler":
+            student = get_student_by_telegram(uid)
+            log = get_or_create_daily_log(student["id"], today_ist_date())
+            for i, t in enumerate(temp.get("scheduler_tasks", [])):
                 create_task({
                     "student_id": student["id"],
                     "daily_log_id": log["id"],
-                    "type": t["type"],
                     "subject": t["subject"],
-                    "topic": t["topic"],
-                    "scheduled_date": target_date,
-                    "scheduled_at": t["scheduled_at"],
-                    "allotted_minutes": t["allotted_minutes"],
-                    "estimated_minutes": t["allotted_minutes"],
-                    "priority": t["priority"],
-                    "source": t["source"],
-                    "status": "pending"
+                    "subject_category": t["category"],
+                    "description": t["description"],
+                    "allotted_minutes": t["minutes"],
+                    "estimated_minutes": t["minutes"],
+                    "priority": t["priority"].lower(),
+                    "sequence_order": i + 1,
+                    "scheduled_date": today_ist_date(),
+                    "status": "pending",
+                    "source": "MANUAL_SCHEDULER"
                 })
+            await update.message.reply_text(
+                "🚀 <b>Scheduler Ready!</b>\n\nAapka aaj ka plan save ho gaya hai. All the best! 💪",
+                reply_markup=ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True),
+                parse_mode="HTML"
+            )
+            # Start the first task automatically
+            await start_next_task(context.bot, student["id"])
             
-            await update.message.reply_text("✅ *Manual Plan Ready!*\n\nAapka scheduler update kar diya gaya hai. Best of luck! 👍", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_TABS_KB, resize_keyboard=True), parse_mode="Markdown")
-            upd_user(uid, {"step": "mentor_tab_selection"})
-            temp.pop("scheduler_data", None)
+            upd_user(uid, {"step": "mentor_ready"})
+            temp.pop("scheduler_tasks", None)
             save_mentorship_temp(uid, temp)
-        return True
-        if text == "Back":
-            await mentorship(update, context)
             return True
-        # Validate date
-        try:
-            target_dt = datetime.strptime(text, "%d/%m/%Y").date()
-            temp.setdefault("planner_data", {})["date"] = text
-            save_mentorship_temp(uid, temp)
-            upd_user(uid, {"step": "mentor_planner_timetable"})
-            await update.message.reply_text(
-                "Enter class start time with AM/PM (Subject - Time)\n\n"
-                "Example:\nBiology - 09:00 AM\nChemistry - 11:30 AM\nPhysics - 02:00 PM",
-                reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True)
-            )
-        except:
-            await update.message.reply_text("❌ Invalid format. Please use DD/MM/YYYY.")
-        return True
-
-    if step == "mentor_planner_timetable":
-        if text == "Back":
-            upd_user(uid, {"step": "mentor_planner_date"})
-            await update.message.reply_text("Enter date for class? (Format: DD/MM/YYYY)", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True))
-            return True
-        
-        # Parse and save timetable
-        slots = parse_slot_text(text)
-        if not slots:
-            await update.message.reply_text(
-                "❌ Format samajh nahi aaya.\n\n"
-                "Example:\nBiology - 09:00 AM\nChemistry - 11:30 AM\nPhysics - 02:00 PM\n\n"
-                "Please check the format and try again."
-            )
-            return True
-            
-        if check_overlap(slots):
-            await update.message.reply_text(
-                "❌ Ek hi time pe 2 classes nahi ho sakti (Overlap detected).\n\n"
-                "Please check your AM/PM timings. Agar koi AM/PM miss kiya hai toh add kijiye aur dobara bhejiye."
-            )
-            return True
-
-        target_date_str = temp.get("planner_data", {}).get("date")
-        try:
-            d = datetime.strptime(target_date_str, "%d/%m/%Y")
-            day_name = d.strftime("%A")
-        except:
-            await update.message.reply_text("❌ Date format error in memory. Please start again from date selection.")
-            upd_user(uid, {"step": "mentor_planner_date"})
-            return True
-
-        student = get_student_by_telegram(uid)
-        if not student:
-            await update.message.reply_text("❌ Student profile not found. Please /start first.")
-            return True
-
-        # Compute free slots and save to DB
-        free_slots = compute_free_slots(slots, student.get("preferred_study_time"), student.get("self_study_hours"), day_name)
-        upsert_weekly_timetable_row(student["id"], day_name, slots, free_slots, student.get("batch_name"))
-        update_student(student["id"], {"timetable_scope": "one_day"})
-
-        temp.setdefault("planner_data", {})["timetable"] = text
-        save_mentorship_temp(uid, temp)
-        upd_user(uid, {"step": "mentor_planner_menu"})
-        await update.message.reply_text("✅ Timetable Saved Successfully!\n🔔 Notification: Will send reminder 30 mins before each class", reply_markup=ReplyKeyboardMarkup(TAB2_PLANNER_OPTS_KB, resize_keyboard=True))
-        return True
-
-    if step == "mentor_planner_menu":
-        if text == "Generate My Daily Plan":
-            await start_sequential_hw_flow(update, context, student)
-        elif text == "Show My Self-Study Planner":
-            tasks = get_student_tasks(student["id"], scheduled_date=today_ist_date())
-            if not tasks:
-                await update.message.reply_text("❌ Aapka aaj ka koi plan nahi mil raha. Naya plan generate karein?", reply_markup=ReplyKeyboardMarkup([["Generate My Daily Plan"], ["Back"]], resize_keyboard=True))
-            else:
-                msg = f"📋 *TODAY'S PLANNER*\n"
-                msg += f"📅 Date: {today_ist_date().strftime('%d %b %Y')}\n"
-                msg += "━━━━━━━━━━━━━━━━━━━━\n\n"
-                
-                emoji_map = {"HW": "📝", "REVISION": "📖", "BACKLOG": "🔁", "PENDING": "⏳", "OTHER": "📌", "CLASS": "🏫"}
-                
-                for t in tasks:
-                    status_emoji = "✅" if t["status"] == "done" else "⭕"
-                    type_emoji = emoji_map.get(t["type"], "📝")
-                    short_id = str(t["id"])[:4]
-                    msg += f"{status_emoji} {type_emoji} `{short_id}`: *{t['subject']}*\n"
-                    msg += f"└ {t['topic']}\n\n"
-                
-                msg += "━━━━━━━━━━━━━━━━━━━━\n"
-                msg += "💡 *To Mark Done:* Type `done [ID]`\n"
-                msg += "Example: `done ab12`"
-                
-                await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=ReplyKeyboardMarkup(TAB2_PLANNER_OPTS_KB, resize_keyboard=True))
-        elif text == "Switch to Backlogs":
-            upd_user(uid, {"step": "mentor_backlog_ready"})
-            await update.message.reply_text("Ready to add backlog?", reply_markup=ReplyKeyboardMarkup([["Yes", "No"], ["Back"]], resize_keyboard=True))
-        elif text == "Back":
-            upd_user(uid, {"step": "mentor_planner_timetable"})
-            await update.message.reply_text(
-                "Class start time AM/PM ke saath bhejo:\n\n"
-                "Example:\nBiology - 09:00 AM\nChemistry - 11:30 AM\nPhysics - 02:00 PM",
-                reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True)
-            )
         return True
 
     if parent_student and text in {"Yes", "No"}:
@@ -6195,14 +6337,23 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
 
         if text == "Entire Week":
             # Save for all days in weekly_timetable
+            try:
+                ws_date = datetime.strptime(target_date_str, "%d/%m/%Y").date()
+                # Find the Monday of that week if we want it strictly Monday-based, 
+                # but the user said "bot samjh jayega week kab khtam ho raha hai" 
+                # so we just use the provided date.
+            except:
+                ws_date = today_ist_date()
+                
             for d_name in WEEK_DAYS:
-                upsert_weekly_timetable_row(student["id"], d_name, slots, free_slots, student.get("batch_name"))
+                upsert_weekly_timetable_row(student["id"], d_name, slots, free_slots, student.get("batch_name"), week_start_date=ws_date)
             update_student(student["id"], {"timetable_scope": "weekly"})
             await update.message.reply_text(
-                "✅ Entire week ke liye set ho gaya! Ab next Monday se pehle nahi pucha jayega.\n\n"
-                "🔔 *Reminder Info*: Har class se pehle aapko notes aur module ke liye reminders bhej diye jayenge.",
+                "✅ Entire week ke liye set ho gaya! Ab har hafte isi ke hisab se reminders milenge.\n\n"
+                "🔔 *Reminder Info*: Har class se pehle aapko reminders bhej diye jayenge.",
                 parse_mode="Markdown"
             )
+
         elif text == "Only for One Day":
             # Save only for that day
             upsert_weekly_timetable_row(student["id"], day_name, slots, free_slots, student.get("batch_name"))
@@ -8561,6 +8712,7 @@ def main():
     app.add_handler(CommandHandler("setauthorphoto", set_author_photo), group=0)
     app.add_handler(CommandHandler("resetme", reset_me), group=0)
 
+    app.add_handler(CallbackQueryHandler(handle_mentorship_callbacks, pattern="^m_"), group=0)
     app.add_handler(CallbackQueryHandler(handle_callback_query), group=0)
     app.add_handler(MessageHandler(filters.Chat(GROUP_CHAT_ID) & non_command_messages, handle_group_reply), group=0)
     app.add_handler(MessageHandler(filters.ChatType.PRIVATE & non_command_messages, handle_teacher_dm), group=0)
