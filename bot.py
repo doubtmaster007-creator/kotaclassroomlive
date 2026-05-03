@@ -18,6 +18,7 @@ from anthropic import Anthropic
 from flask import Flask, jsonify
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters, ApplicationHandlerStop, CallbackQueryHandler
+from psycopg2.pool import ThreadedConnectionPool
 
 # Setup logging
 logger = logging.getLogger(__name__)
@@ -30,6 +31,35 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 GROUP_CHAT_ID = int(os.getenv("GROUP_CHAT_ID", "-1003771984803"))
 MODEL_SONNET = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+
+# Connection Pool Global
+DB_POOL = None
+
+def init_db_pool():
+    global DB_POOL
+    if not DATABASE_URL: return
+    try:
+        # Auto-fix Supabase port for pooler
+        target_url = DATABASE_URL
+        if "pooler.supabase.com" in target_url and ":5432" in target_url:
+            target_url = target_url.replace(":5432", ":6543")
+            
+        DB_POOL = ThreadedConnectionPool(1, 20, target_url)
+        logger.info("✅ Database Connection Pool initialized (1-20 connections).")
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize DB Pool: {e}")
+
+def put_conn(conn):
+    if DB_POOL and conn:
+        try:
+            DB_POOL.putconn(conn)
+        except:
+            try: conn.close()
+            except: pass
+    elif conn:
+        try: conn.close()
+        except: pass
 MODEL_HAIKU = "claude-haiku-4-5-20251001"
 DB_PATH = os.getenv("DB_PATH", "bot_data.db")
 PYQ_FILE = Path(os.getenv("PYQ_FILE", "pyq_bank.json"))
@@ -1666,7 +1696,7 @@ def check_phone_in_doubt_portal(phone: str) -> dict:
             (f"%{phone_clean[-10:]}%",)
         )
         result = cur.fetchone()
-        c.close()
+        put_conn(c)
         return result
     except Exception as e:
         print(f"Error checking doubt portal: {e}")
@@ -1683,7 +1713,7 @@ def check_telegram_user_in_portal(telegram_id: int) -> dict:
         cur = db_cursor(c)
         cur.execute("SELECT * FROM users WHERE id=%s", (telegram_id,))
         result = cur.fetchone()
-        c.close()
+        put_conn(c)
         return result
     except Exception:
         return None
@@ -1748,6 +1778,8 @@ def db():
         target_url = target_url.replace(":5432", ":6543")
 
     try:
+        if DB_POOL:
+            return DB_POOL.getconn()
         conn = psycopg2.connect(target_url)
         return conn
     except Exception as e:
@@ -1783,7 +1815,7 @@ def ensure_column_pg(conn, table, column, coldef):
         c = conn.cursor()
         c.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {coldef}")
         conn.commit()
-        c.close()
+        put_conn(c)
     except Exception:
         conn.rollback()
 
@@ -2058,7 +2090,7 @@ def init_db():
         ensure_column_pg(conn, "medical_leaves", "auto_cancel_time", "TIMESTAMP")
         ensure_column_pg(conn, "medical_leaves", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
         
-        c.close()
+        put_conn(c)
         conn.close()
         print("✅ DB migrated and connected!")
     except Exception as e:
@@ -2071,24 +2103,24 @@ def ensure_column(conn, table, column, coltype):
 def get_meta(key, default=""):
     c = db(); cur = db_cursor(c)
     cur.execute("SELECT value FROM meta WHERE key=%s", (key,))
-    r = cur.fetchone(); c.close()
+    r = cur.fetchone(); put_conn(c)
     return r["value"] if r else default
 
 def set_meta(key, value):
     c = db(); cur = db_cursor(c)
     cur.execute("INSERT INTO meta(key,value) VALUES(%s,%s) ON CONFLICT (key) DO UPDATE SET value=excluded.value", (key, value))
-    c.commit(); c.close()
+    c.commit(); put_conn(c)
 
 def ensure_user(uid):
     c = db(); cur = db_cursor(c)
     ts = now_iso()
     cur.execute("INSERT INTO users(user_id,step,created_at,updated_at) VALUES(%s, 'name', %s, %s) ON CONFLICT (user_id) DO NOTHING", (uid, ts, ts))
-    c.commit(); c.close()
+    c.commit(); put_conn(c)
 
 def get_user(uid) -> Optional[Dict[str, Any]]:
     c = db(); cur = db_cursor(c)
     cur.execute("SELECT * FROM users WHERE user_id=%s", (uid,))
-    r = cur.fetchone(); c.close()
+    r = cur.fetchone(); put_conn(c)
     return dict(r) if r else None
 
 def upd_user(uid, fields: Dict[str, Any]):
@@ -2100,7 +2132,7 @@ def upd_user(uid, fields: Dict[str, Any]):
     cols = [f"{k}=%s" for k in fields_copy.keys()]
     vals = list(fields_copy.values()) + [uid]
     cur.execute(f"UPDATE users SET {', '.join(cols)} WHERE user_id=%s", vals)
-    c.commit(); c.close()
+    c.commit(); put_conn(c)
 
 def get_mentorship_temp(user: Dict[str, Any]) -> Dict[str, Any]:
     raw = user.get("mentorship_temp")
@@ -2235,7 +2267,7 @@ def is_faculty_user(user_id: int) -> bool:
     if not row:
         cur.execute("SELECT 1 FROM teachers WHERE teacher_id=%s", (user_id,))
         row = cur.fetchone()
-    c.close()
+    put_conn(c)
     return bool(row)
 
 def get_faculty_by_telegram(telegram_id: int) -> Optional[Dict[str, Any]]:
@@ -2244,12 +2276,12 @@ def get_faculty_by_telegram(telegram_id: int) -> Optional[Dict[str, Any]]:
     cur.execute("SELECT * FROM faculty WHERE telegram_id=%s", (str(telegram_id),))
     row = cur.fetchone()
     if row:
-        c.close()
+        put_conn(c)
         return dict(row)
     # Fallback to teachers table
     cur.execute("SELECT * FROM teachers WHERE teacher_id=%s", (telegram_id,))
     row = cur.fetchone()
-    c.close()
+    put_conn(c)
     if row:
         r = dict(row)
         return {
@@ -2265,21 +2297,21 @@ def get_student_by_telegram(telegram_id: int) -> Optional[Dict[str, Any]]:
     c = db(); cur = db_cursor(c)
     cur.execute("SELECT * FROM students WHERE telegram_id=%s", (str(telegram_id),))
     row = cur.fetchone()
-    c.close()
+    put_conn(c)
     return dict(row) if row else None
 
 def get_student_by_parent_telegram(telegram_id: int) -> Optional[Dict[str, Any]]:
     c = db(); cur = db_cursor(c)
     cur.execute("SELECT * FROM students WHERE parent_telegram_id=%s", (str(telegram_id),))
     row = cur.fetchone()
-    c.close()
+    put_conn(c)
     return dict(row) if row else None
 
 def get_student(student_id: str) -> Optional[Dict[str, Any]]:
     c = db(); cur = db_cursor(c)
     cur.execute("SELECT * FROM students WHERE id=%s", (student_id,))
     row = cur.fetchone()
-    c.close()
+    put_conn(c)
     return dict(row) if row else None
 
 def upsert_student_by_telegram(telegram_id: int, fields: Dict[str, Any]) -> Dict[str, Any]:
@@ -2306,7 +2338,7 @@ def upsert_student_by_telegram(telegram_id: int, fields: Dict[str, Any]) -> Dict
         )
     row = cur.fetchone()
     c.commit()
-    c.close()
+    put_conn(c)
     return dict(row)
 
 def update_student(student_id: str, fields: Dict[str, Any]):
@@ -2320,13 +2352,13 @@ def update_student(student_id: str, fields: Dict[str, Any]):
         cur.execute(f"UPDATE students SET {set_clause} WHERE id=%s", vs + [student_id])
     else:
         cur.execute(f"UPDATE students SET {set_clause}, updated_at=now() WHERE id=%s", vs + [student_id])
-    c.commit(); c.close()
+    c.commit(); put_conn(c)
 
 def get_pending_student_approvals() -> List[Dict[str, Any]]:
     c = db(); cur = db_cursor(c)
     cur.execute("SELECT * FROM students WHERE is_approved=false ORDER BY created_at DESC")
     rows = [dict(r) for r in cur.fetchall()]
-    c.close()
+    put_conn(c)
     return rows
 
 def find_student_for_approval(value: str) -> Optional[Dict[str, Any]]:
@@ -2340,7 +2372,7 @@ def find_student_for_approval(value: str) -> Optional[Dict[str, Any]]:
             cur.execute("SELECT * FROM students WHERE telegram_id = %s LIMIT 1", (int(value),))
             row = cur.fetchone()
             if row:
-                c.close()
+                put_conn(c)
                 return dict(row)
     except Exception as e:
         c.rollback()
@@ -2358,7 +2390,7 @@ def find_student_for_approval(value: str) -> Optional[Dict[str, Any]]:
         (value, f"%{clean_val}%" if clean_val else value),
     )
     row = cur.fetchone()
-    c.close()
+    put_conn(c)
     return dict(row) if row else None
 
 def upsert_weekly_timetable_row(student_id: str, day_of_week: str, coaching_slots: List[Dict[str, Any]], free_slots: List[Dict[str, Any]], batch_name: Optional[str], week_start_date: Optional[date] = None):
@@ -2374,14 +2406,14 @@ def upsert_weekly_timetable_row(student_id: str, day_of_week: str, coaching_slot
         """,
         (student_id, day_of_week, json.dumps(coaching_slots), json.dumps(free_slots), batch_name, week_start_date)
     )
-    c.commit(); c.close()
+    c.commit(); put_conn(c)
 
 
 def get_weekly_timetable(student_id: str) -> List[Dict[str, Any]]:
     c = db(); cur = db_cursor(c)
     cur.execute("SELECT * FROM weekly_timetable WHERE student_id=%s ORDER BY created_at", (student_id,))
     rows = [dict(r) for r in cur.fetchall()]
-    c.close()
+    put_conn(c)
     for row in rows:
         row["coaching_slots"] = row["coaching_slots"] if isinstance(row["coaching_slots"], list) else safe_json_loads(row.get("coaching_slots") or "[]", [])
         row["free_slots"] = row["free_slots"] if isinstance(row["free_slots"], list) else safe_json_loads(row.get("free_slots") or "[]", [])
@@ -2391,7 +2423,7 @@ def get_weekday_timetable(student_id: str, day_name: str) -> Optional[Dict[str, 
     c = db(); cur = db_cursor(c)
     cur.execute("SELECT * FROM weekly_timetable WHERE student_id=%s AND lower(day_of_week)=lower(%s) LIMIT 1", (student_id, day_name))
     row = cur.fetchone()
-    c.close()
+    put_conn(c)
     if not row:
         return None
     data = dict(row)
@@ -2412,7 +2444,7 @@ def init_db_schema():
         logger.error(f"Schema update failed: {e}")
         c.rollback()
     finally:
-        c.close()
+        put_conn(c)
 
 def get_or_create_daily_log(student_id: str, date_value) -> Dict[str, Any]:
     c = db(); cur = db_cursor(c)
@@ -2429,7 +2461,7 @@ def get_or_create_daily_log(student_id: str, date_value) -> Dict[str, Any]:
         )
         row = cur.fetchone()
         c.commit()
-    c.close()
+    put_conn(c)
     return dict(row)
 
 def update_daily_log(log_id: str, fields: Dict[str, Any]):
@@ -2439,7 +2471,7 @@ def update_daily_log(log_id: str, fields: Dict[str, Any]):
     vs = [fields[k] for k in ks]
     c = db(); cur = db_cursor(c)
     cur.execute(f"UPDATE daily_logs SET {', '.join([k+'=%s' for k in ks])} WHERE id=%s", vs + [log_id])
-    c.commit(); c.close()
+    c.commit(); put_conn(c)
 
 def create_task(data: Dict[str, Any]) -> Dict[str, Any]:
     cols = list(data.keys()) + ["created_at"]
@@ -2450,7 +2482,7 @@ def create_task(data: Dict[str, Any]) -> Dict[str, Any]:
         vals,
     )
     row = cur.fetchone()
-    c.commit(); c.close()
+    c.commit(); put_conn(c)
     return dict(row)
 
 def sync_class_tasks(student_id: str, target_date: date, slots: List[Dict[str, Any]]):
@@ -2483,12 +2515,12 @@ def update_task(task_id: str, fields: Dict[str, Any]):
     vs = [fields[k] for k in ks]
     c = db(); cur = db_cursor(c)
     cur.execute(f"UPDATE tasks SET {', '.join([k+'=%s' for k in ks])} WHERE id=%s", vs + [task_id])
-    c.commit(); c.close()
+    c.commit(); put_conn(c)
 
 def delete_pending_tasks_for_day(student_id: str, scheduled_date: date):
     c = db(); cur = db_cursor(c)
     cur.execute("DELETE FROM tasks WHERE student_id=%s AND scheduled_date=%s AND status='pending'", (student_id, scheduled_date))
-    c.commit(); c.close()
+    c.commit(); put_conn(c)
 
 def get_student_tasks(student_id: str, statuses: Optional[List[str]] = None, scheduled_date=None) -> List[Dict[str, Any]]:
     c = db(); cur = db_cursor(c)
@@ -2503,7 +2535,7 @@ def get_student_tasks(student_id: str, statuses: Optional[List[str]] = None, sch
     query += " ORDER BY deadline_time NULLS LAST, created_at"
     cur.execute(query, params)
     rows = [dict(r) for r in cur.fetchall()]
-    c.close()
+    put_conn(c)
     return rows
 
 def get_pending_tasks_upto_days(student_id: str, days: int = 3) -> List[Dict[str, Any]]:
@@ -2519,7 +2551,7 @@ def get_pending_tasks_upto_days(student_id: str, days: int = 3) -> List[Dict[str
         (student_id, today_ist_date() - timedelta(days=days)),
     )
     rows = [dict(r) for r in cur.fetchall()]
-    c.close()
+    put_conn(c)
     return rows
 
 def create_backlog(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -2531,7 +2563,7 @@ def create_backlog(data: Dict[str, Any]) -> Dict[str, Any]:
         vals,
     )
     row = cur.fetchone()
-    c.commit(); c.close()
+    c.commit(); put_conn(c)
     return dict(row)
 
 def update_backlog(backlog_id: str, fields: Dict[str, Any]):
@@ -2541,7 +2573,7 @@ def update_backlog(backlog_id: str, fields: Dict[str, Any]):
     vs = [fields[k] for k in ks]
     c = db(); cur = db_cursor(c)
     cur.execute(f"UPDATE backlogs SET {', '.join([k+'=%s' for k in ks])} WHERE id=%s", vs + [backlog_id])
-    c.commit(); c.close()
+    c.commit(); put_conn(c)
 
 def get_backlogs(student_id: str, statuses: Optional[List[str]] = None) -> List[Dict[str, Any]]:
     c = db(); cur = db_cursor(c)
@@ -2553,14 +2585,14 @@ def get_backlogs(student_id: str, statuses: Optional[List[str]] = None) -> List[
     query += " ORDER BY created_at DESC"
     cur.execute(query, params)
     rows = [dict(r) for r in cur.fetchall()]
-    c.close()
+    put_conn(c)
     return rows
 
 def get_backlog(backlog_id) -> Optional[Dict[str, Any]]:
     c = db(); cur = db_cursor(c)
     cur.execute("SELECT * FROM backlogs WHERE id=%s", (backlog_id,))
     row = cur.fetchone()
-    c.close()
+    put_conn(c)
     return dict(row) if row else None
 
 def create_report(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -2572,7 +2604,7 @@ def create_report(data: Dict[str, Any]) -> Dict[str, Any]:
         vals,
     )
     row = cur.fetchone()
-    c.commit(); c.close()
+    c.commit(); put_conn(c)
     return dict(row)
 
 def get_reports(student_id: str, report_type: Optional[str] = None, start_date=None) -> List[Dict[str, Any]]:
@@ -2588,14 +2620,14 @@ def get_reports(student_id: str, report_type: Optional[str] = None, start_date=N
     query += " ORDER BY created_at DESC"
     cur.execute(query, params)
     rows = [dict(r) for r in cur.fetchall()]
-    c.close()
+    put_conn(c)
     return rows
 
 def active_students() -> List[Dict[str, Any]]:
     c = db(); cur = db_cursor(c)
     cur.execute("SELECT * FROM students WHERE is_approved=True")
     rows = [dict(r) for r in cur.fetchall()]
-    c.close()
+    put_conn(c)
     return rows
 
 def update_student_by_telegram(telegram_id: int, fields: Dict[str, Any]):
@@ -2625,14 +2657,14 @@ def upsert_medical_leave(student_id: str, leave_date, fields: Dict[str, Any]) ->
             vals,
         )
     out = cur.fetchone()
-    c.commit(); c.close()
+    c.commit(); put_conn(c)
     return dict(out)
 
 def get_medical_leave(student_id: str, leave_date) -> Optional[Dict[str, Any]]:
     c = db(); cur = db_cursor(c)
     cur.execute("SELECT * FROM medical_leaves WHERE student_id=%s AND leave_date=%s", (student_id, leave_date))
     row = cur.fetchone()
-    c.close()
+    put_conn(c)
     return dict(row) if row else None
 
 def count_recent_medical_leaves(student_id: str, days: int = 5) -> int:
@@ -2648,7 +2680,7 @@ def count_recent_medical_leaves(student_id: str, days: int = 5) -> int:
         (student_id, today_ist_date() - timedelta(days=days - 1)),
     )
     row = cur.fetchone()
-    c.close()
+    put_conn(c)
     return int(row["cnt"] if row else 0)
 
 def upsert_test_week(student_id: str, week_start_date, fields: Dict[str, Any]) -> Dict[str, Any]:
@@ -2672,21 +2704,21 @@ def upsert_test_week(student_id: str, week_start_date, fields: Dict[str, Any]) -
             vals,
         )
     out = cur.fetchone()
-    c.commit(); c.close()
+    c.commit(); put_conn(c)
     return dict(out)
 
 def get_test_week(student_id: str, week_start_date) -> Optional[Dict[str, Any]]:
     c = db(); cur = db_cursor(c)
     cur.execute("SELECT * FROM test_weeks WHERE student_id=%s AND week_start_date=%s", (student_id, week_start_date))
     row = cur.fetchone()
-    c.close()
+    put_conn(c)
     return dict(row) if row else None
 
 def get_approved_students() -> List[Dict[str, Any]]:
     c = db(); cur = db_cursor(c)
     cur.execute("SELECT * FROM students WHERE is_approved=true ORDER BY created_at")
     rows = [dict(r) for r in cur.fetchall()]
-    c.close()
+    put_conn(c)
     return rows
 
 def parse_slot_text(text: str) -> List[Dict[str, Any]]:
@@ -2823,7 +2855,7 @@ def ins_doubt(data: Dict[str, Any]):
         int(data.get("needs_teacher_review", 0)), int(data.get("diagram_required", 0)), data.get("diagram_data"),
         data.get("status", "created"), ts, ts
     ))
-    c.commit(); c.close()
+    c.commit(); put_conn(c)
 
 def upd_doubt(qid, fields):
     if not fields: return
@@ -2831,19 +2863,19 @@ def upd_doubt(qid, fields):
     ks = list(fields.keys()); vs = [fields[k] for k in ks]
     c = db(); cur = db_cursor(c)
     cur.execute(f"UPDATE doubts SET {', '.join([k+'=%s' for k in ks])} WHERE qid=%s", vs + [qid])
-    c.commit(); c.close()
+    c.commit(); put_conn(c)
 
 def get_ticket(qid):
     c = db(); cur = db_cursor(c)
     cur.execute("SELECT * FROM tickets WHERE qid=%s", (qid,))
-    r = cur.fetchone(); c.close()
+    r = cur.fetchone(); put_conn(c)
     return dict(r) if r else None
 
 def get_ticket_by_claim_code(claim_code):
     c = db(); cur = db_cursor(c)
     cur.execute("SELECT * FROM tickets WHERE claim_code=%s AND status='pending_teacher'", (claim_code,))
     rows = [dict(r) for r in cur.fetchall()]
-    c.close()
+    put_conn(c)
     if len(rows) == 1:
         return rows[0]
     return None
@@ -2863,7 +2895,7 @@ def upsert_ticket(t):
         t.get("reply_count", 0), t.get("reopen_count", 0),
         t.get("claim_code"), t.get("claim_expires_at")
     ))
-    c.commit(); c.close()
+    c.commit(); put_conn(c)
 
 def upd_ticket(qid, fields):
     if not fields: return
@@ -2871,30 +2903,30 @@ def upd_ticket(qid, fields):
     ks = list(fields.keys()); vs = [fields[k] for k in ks]
     c = db(); cur = db_cursor(c)
     cur.execute(f"UPDATE tickets SET {', '.join([k+'=%s' for k in ks])} WHERE qid=%s", vs + [qid])
-    c.commit(); c.close()
+    c.commit(); put_conn(c)
 
 def pending_tickets():
     c = db(); cur = db_cursor(c)
     cur.execute("SELECT * FROM tickets WHERE status='pending_teacher'")
-    rows = [dict(x) for x in cur.fetchall()]; c.close()
+    rows = [dict(x) for x in cur.fetchall()]; put_conn(c)
     return rows
 
 def save_teacher_reply(qid, teacher_id, teacher_name, text, photo, caption):
     c = db(); cur = db_cursor(c)
     cur.execute("""INSERT INTO teacher_replies(qid,teacher_id,teacher_username,reply_text,reply_photo,reply_caption,teacher_feedback,created_at)
     VALUES(%s,%s,%s,%s,%s,%s,%s,%s)""", (qid, teacher_id, teacher_name, text, photo, caption, None, now_iso()))
-    c.commit(); c.close()
+    c.commit(); put_conn(c)
 
 def save_teacher_reply_with_feedback(qid, teacher_id, teacher_name, text, photo, caption, feedback):
     c = db(); cur = db_cursor(c)
     cur.execute("""INSERT INTO teacher_replies(qid,teacher_id,teacher_username,reply_text,reply_photo,reply_caption,teacher_feedback,created_at)
     VALUES(%s,%s,%s,%s,%s,%s,%s,%s)""", (qid, teacher_id, teacher_name, text, photo, caption, feedback, now_iso()))
-    c.commit(); c.close()
+    c.commit(); put_conn(c)
 
 def add_rating(uid, qid, rating):
     c = db(); cur = db_cursor(c)
     cur.execute("INSERT INTO ratings(user_id,qid,rating,created_at) VALUES(%s,%s,%s,%s)", (uid, qid, rating, now_iso()))
-    c.commit(); c.close()
+    c.commit(); put_conn(c)
 
 def get_users_with_doubts() -> List[int]:
     c = db(); cur = db_cursor(c)
@@ -2905,13 +2937,13 @@ def get_users_with_doubts() -> List[int]:
         WHERE IFNULL(u.is_blocked, 0) = 0
     """)
     rows = [int(r[0]) for r in cur.fetchall()]
-    c.close()
+    put_conn(c)
     return rows
 
 def get_teacher_session(teacher_id):
     c = db(); cur = db_cursor(c)
     cur.execute("SELECT * FROM teacher_sessions WHERE teacher_id=%s", (teacher_id,))
-    r = cur.fetchone(); c.close()
+    r = cur.fetchone(); put_conn(c)
     return dict(r) if r else None
 
 def upsert_teacher_session(teacher_id, qid, mode, draft_solution=None, draft_photo=None, draft_caption=None):
@@ -2927,12 +2959,12 @@ def upsert_teacher_session(teacher_id, qid, mode, draft_solution=None, draft_pho
         draft_caption=excluded.draft_caption,
         updated_at=excluded.updated_at
     """, (teacher_id, qid, mode, draft_solution, draft_photo, draft_caption, ts, ts))
-    c.commit(); c.close()
+    c.commit(); put_conn(c)
 
 def clear_teacher_session(teacher_id):
     c = db(); cur = db_cursor(c)
     cur.execute("DELETE FROM teacher_sessions WHERE teacher_id=%s", (teacher_id,))
-    c.commit(); c.close()
+    c.commit(); put_conn(c)
 
 def blocked_message():
     return f"Your account is blocked due to repeated policy violations.\nFor unblock request, contact: {UNBLOCK_EMAIL}"
@@ -2946,7 +2978,7 @@ def is_owner_user(user_id: int) -> bool:
 def get_doubt(qid):
     c = db(); cur = db_cursor(c)
     cur.execute("SELECT * FROM doubts WHERE qid=%s", (qid,))
-    r = cur.fetchone(); c.close()
+    r = cur.fetchone(); put_conn(c)
     return dict(r) if r else None
 
 async def prompt_new_doubt(update_or_context, uid: int, via_context: bool = False, text: str = "Doubt resolved 🚀\n'Ask Doubt' ya 'My Mentorship' me se choose karein 👇"):
@@ -3098,8 +3130,9 @@ async def handle_parent_steps(update: Update, context: ContextTypes.DEFAULT_TYPE
                     reply_markup=ReplyKeyboardMarkup([["Child's Progress Summary"]], resize_keyboard=True)
                 )
                 
-                # Notify student
+                # Notify student and move to dashboard
                 try:
+                    upd_user(student_uid, {"step": "mentor_tab_selection"})
                     await context.bot.send_message(
                         chat_id=student_uid, 
                         text="✅ <b>Parent Verified!</b>\n\nAapke parent ne verification complete kar diya hai. Ab aapka Mentorship Dashboard fully active hai! 🚀",
@@ -3944,7 +3977,7 @@ async def inactivity_watchdog_loop(bot):
                     except Exception as e:
                         logger.debug(f"Could not notify timeout for {uid}: {e}")
             finally:
-                c.close()
+                put_conn(c)
         except Exception as e:
             logger.error(f"Error in inactivity watchdog: {e}")
             await asyncio.sleep(10)
@@ -4302,7 +4335,7 @@ async def start_next_task(bot, student_id):
     )
     task = cur.fetchone()
     if not task:
-        c.close()
+        put_conn(c)
         return False
     
     now = datetime.now(IST)
@@ -4312,7 +4345,7 @@ async def start_next_task(bot, student_id):
         "UPDATE tasks SET status='in_progress', start_time=%s, estimated_end_time=%s, updated_at=now() WHERE id=%s",
         (now, end_time, task["id"])
     )
-    c.commit(); c.close()
+    c.commit(); put_conn(c)
     
     student = get_student(student_id)
     kb = [
@@ -4339,7 +4372,7 @@ async def start_next_task(bot, student_id):
         )
         c = db(); cur = db_cursor(c)
         cur.execute("UPDATE tasks SET timer_message_id=%s WHERE id=%s", (msg.message_id, task["id"]))
-        c.commit(); c.close()
+        c.commit(); put_conn(c)
         await bot.pin_chat_message(chat_id=int(student["telegram_id"]), message_id=msg.message_id)
     except: pass
     return True
@@ -4355,7 +4388,7 @@ async def handle_mentorship_callbacks(update: Update, context: ContextTypes.DEFA
         task_id = int(data.split("_")[2])
         c = db(); cur = db_cursor(c)
         cur.execute("UPDATE tasks SET status='done', actual_end_time=now(), updated_at=now() WHERE id=%s", (task_id,))
-        c.commit(); c.close()
+        c.commit(); put_conn(c)
         
         await query.answer("Great job! Task complete. 🌟")
         await query.edit_message_text(f"✅ <b>Task Completed!</b>\n\nMoving to the next task in your schedule...", parse_mode="HTML")
@@ -4370,10 +4403,10 @@ async def handle_mentorship_callbacks(update: Update, context: ContextTypes.DEFA
         task = cur.fetchone()
         if task["pause_count"] >= 1:
             await query.answer("⚠️ Aap sirf ek baar pause le sakte hain per task.", show_alert=True)
-            c.close(); return
+            put_conn(c); return
         new_end = task["estimated_end_time"] + timedelta(minutes=10)
         cur.execute("UPDATE tasks SET is_paused=true, paused_at=now(), pause_count=pause_count+1, estimated_end_time=%s WHERE id=%s", (new_end, task_id))
-        c.commit(); c.close()
+        c.commit(); put_conn(c)
         await query.answer("⏸ 10 mins break started.")
         await query.edit_message_text(f"⏸ <b>TASK PAUSED (10m Break)</b>\n\nTask: {task['description']}\n\nResuming automatically soon...", parse_mode="HTML")
 
@@ -4384,7 +4417,7 @@ async def handle_mentorship_callbacks(update: Update, context: ContextTypes.DEFA
         task = cur.fetchone()
         if task["extension_count"] >= 2:
             await query.answer("⚠️ Max 2 extensions allowed.", show_alert=True)
-            c.close(); return
+            put_conn(c); return
         new_end = task["estimated_end_time"] + timedelta(minutes=15)
         cur.execute("UPDATE tasks SET extension_minutes=extension_minutes+15, extension_count=extension_count+1, estimated_end_time=%s WHERE id=%s", (new_end, task_id))
         
@@ -4395,7 +4428,7 @@ async def handle_mentorship_callbacks(update: Update, context: ContextTypes.DEFA
             (student["id"], today_ist_date(), task["sequence_order"])
         )
         
-        c.commit(); c.close()
+        c.commit(); put_conn(c)
         await query.answer("⏳ 15 minutes added and schedule shifted! 👍")
 
 async def send_weekly_mentorship_summary(bot, student_id):
@@ -4423,7 +4456,7 @@ async def send_weekly_mentorship_summary(bot, student_id):
     stats = cur.fetchall()
     
     if not stats:
-        c.close(); return # No data for the week
+        put_conn(c); return # No data for the week
         
     total_comp = sum(s["completed_tasks"] for s in stats)
     total_all = sum(s["total_tasks"] for s in stats)
@@ -4466,7 +4499,7 @@ async def send_weekly_mentorship_summary(bot, student_id):
             # Fallback to original if translation fails
             await bot.send_message(chat_id=int(parent_id), text=f"👨‍👩‍👧‍👦 <b>Weekly Report:</b>\n\n{msg}", parse_mode="HTML")
     
-    c.close()
+    put_conn(c)
 
 async def handle_view_backlogs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -4476,7 +4509,7 @@ async def handle_view_backlogs(update: Update, context: ContextTypes.DEFAULT_TYP
     c = db(); cur = db_cursor(c)
     cur.execute("SELECT * FROM backlogs WHERE student_id=%s ORDER BY created_at DESC", (student["id"],))
     backlogs = cur.fetchall()
-    c.close()
+    put_conn(c)
     
     if not backlogs:
         await update.message.reply_text("Abhi aapka koi backlog record nahi hai. Add karne ke liye 'Add Backlogs' dabayein.")
@@ -4960,7 +4993,7 @@ async def run_mentorship_scheduler(bot):
                         c = db(); cur = db_cursor(c)
                         cur.execute("SELECT COUNT(*) FROM daily_logs WHERE student_id=%s AND report_date > %s", (student["id"], (now_dt - timedelta(days=3)).date()))
                         count = cur.fetchone()[0]
-                        c.close()
+                        put_conn(c)
                         if count == 0 and student.get("mentor_id_telegram"):
                             await bot.send_message(
                                 chat_id=int(student["mentor_id_telegram"]),
@@ -5824,41 +5857,78 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         return True
 
     if step == "mentor_scheduler_confirm":
+        if text == "Back":
+            if temp.get("scheduler_tasks"):
+                last_task = temp["scheduler_tasks"].pop()
+                temp["scheduler_current_task"] = last_task
+                save_mentorship_temp(uid, temp)
+                upd_user(uid, {"step": "mentor_scheduler_priority"})
+                await update.message.reply_text(
+                    f"🚩 <b>Subject:</b> {last_task['subject']}\n\nIs task ki priority firse chunein:",
+                    reply_markup=ReplyKeyboardMarkup(PRIORITY_OPTIONS, resize_keyboard=True),
+                    parse_mode="HTML"
+                )
+            else:
+                upd_user(uid, {"step": "mentor_scheduler_subject"})
+                await update.message.reply_text("Pehle koi task add karein. Subject select karein:", reply_markup=ReplyKeyboardMarkup(SCHEDULER_SUBJECT_OPTIONS, resize_keyboard=True))
+            return True
+
         if text == "Add Next Subject":
             upd_user(uid, {"step": "mentor_scheduler_subject"})
             await update.message.reply_text("Next subject select karein:", reply_markup=ReplyKeyboardMarkup(SCHEDULER_SUBJECT_OPTIONS, resize_keyboard=True))
             return True
         
-        if text == "Finish & Start Scheduler":
-            student = get_student_by_telegram(uid)
-            log = get_or_create_daily_log(student["id"], today_ist_date())
-            for i, t in enumerate(temp.get("scheduler_tasks", [])):
-                create_task({
-                    "student_id": student["id"],
-                    "daily_log_id": log["id"],
-                    "subject": t["subject"],
-                    "subject_category": t["category"],
-                    "description": t["description"],
-                    "allotted_minutes": t["minutes"],
-                    "estimated_minutes": t["minutes"],
-                    "priority": t["priority"].lower(),
-                    "sequence_order": i + 1,
-                    "scheduled_date": today_ist_date(),
-                    "status": "pending",
-                    "source": "MANUAL_SCHEDULER"
-                })
-            await update.message.reply_text(
-                "🚀 <b>Scheduler Ready!</b>\n\nAapka aaj ka plan save ho gaya hai. All the best! 💪",
-                reply_markup=ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True),
-                parse_mode="HTML"
-            )
-            # Start the first task automatically
-            await start_next_task(context.bot, student["id"])
-            
-            upd_user(uid, {"step": "mentor_ready"})
-            temp.pop("scheduler_tasks", None)
-            save_mentorship_temp(uid, temp)
-            return True
+            try:
+                student = get_student_by_telegram(uid)
+                if not student:
+                    await update.message.reply_text("❌ Student record not found.")
+                    return True
+                
+                log = get_or_create_daily_log(student["id"], today_ist_date())
+                tasks = temp.get("scheduler_tasks", [])
+                
+                logger.info(f"Finishing scheduler for {uid}. Creating {len(tasks)} tasks.")
+                
+                for i, t in enumerate(tasks):
+                    create_task({
+                        "student_id": student["id"],
+                        "daily_log_id": log["id"],
+                        "subject": t["subject"],
+                        "subject_category": t["category"],
+                        "description": t["description"],
+                        "allotted_minutes": t["minutes"],
+                        "estimated_minutes": t["minutes"],
+                        "priority": t["priority"].lower(),
+                        "sequence_order": i + 1,
+                        "scheduled_date": today_ist_date(),
+                        "status": "pending",
+                        "source": "MANUAL_SCHEDULER"
+                    })
+                
+                # Start the first task automatically
+                logger.info(f"Starting first task for student {student['id']}")
+                await start_next_task(context.bot, student["id"])
+                
+                await update.message.reply_text(
+                    "🚀 <b>Scheduler Ready!</b>\n\nAapka aaj ka plan save ho gaya hai. All the best! 💪",
+                    reply_markup=ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True),
+                    parse_mode="HTML"
+                )
+                
+                upd_user(uid, {"step": "mentor_ready"})
+                temp.pop("scheduler_tasks", None)
+                save_mentorship_temp(uid, temp)
+                return True
+            except Exception as fe:
+                logger.error(f"Error in Finish Scheduler: {fe}", exc_info=True)
+                await update.message.reply_text("⚠️ Plan save karte waqt error aaya. Please try again.")
+                return True
+
+        await update.message.reply_text(
+            "⚠️ Please select an option from the menu:\n\n- <b>Add Next Subject</b>: Ek aur task add karein.\n- <b>Finish & Start Scheduler</b>: Plan khatam karke start karein.\n- <b>Back</b>: Pichle task par wapas jayein.",
+            reply_markup=ReplyKeyboardMarkup([["Add Next Subject", "Finish & Start Scheduler"], ["Back"]], resize_keyboard=True),
+            parse_mode="HTML"
+        )
         return True
 
     if parent_student and text in {"Yes", "No"}:
@@ -6179,7 +6249,7 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
             c = db(); cur = db_cursor(c)
             cur.execute("SELECT id FROM weekly_timetable WHERE student_id=%s AND day_of_week=%s", (student["id"], day_name))
             exists = cur.fetchone()
-            c.close()
+            put_conn(c)
             
             if exists:
                 temp = get_mentorship_temp(u)
@@ -6902,7 +6972,7 @@ async def reset_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Reset failed: {e}")
         await update.message.reply_text(f"❌ Reset failed: {e}")
     finally:
-        c.close()
+        put_conn(c)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.message.from_user.id
@@ -7126,7 +7196,7 @@ async def resume_ticket(update: Update, context: ContextTypes.DEFAULT_TYPE):
         c = db(); cur = db_cursor(c)
         cur.execute("SELECT * FROM tickets WHERE claim_code=%s AND status='on_hold'", (code,))
         row = cur.fetchone()
-        c.close()
+        put_conn(c)
         t = dict(row) if row else None
     if not t or t["status"] not in {"on_hold", "pending_teacher"}:
         await update.message.reply_text("Held ticket not found.")
@@ -7154,7 +7224,7 @@ async def reset_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if len(clean_val) > 10: clean_val = clean_val[-10:]
             c = db(); cur = db_cursor(c)
             cur.execute("SELECT user_id FROM users WHERE user_id::text = %s OR phone LIKE %s", (val, f"%{clean_val}%" if clean_val else val))
-            r = cur.fetchone(); c.close()
+            r = cur.fetchone(); put_conn(c)
             if not r:
                 await update.message.reply_text("User not found.")
                 return
@@ -7163,7 +7233,7 @@ async def reset_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     c = db(); cur = db_cursor(c)
     past_date = (datetime.now(UTC) - timedelta(hours=48)).isoformat()
     cur.execute("UPDATE doubts SET created_at = %s WHERE user_id = %s", (past_date, target_uid))
-    c.commit(); c.close()
+    c.commit(); put_conn(c)
     
     ensure_user(target_uid)
     upd_user(target_uid, {"step": "ready_for_new_doubt"})
@@ -7192,7 +7262,7 @@ async def set_premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
             query = "SELECT user_id FROM users WHERE user_id::text = %s OR phone LIKE %s"
             param = f"%{clean_val}%" if clean_val else val
             cur.execute(query, (val, param))
-            r = cur.fetchone(); c.close()
+            r = cur.fetchone(); put_conn(c)
             if not r:
                 return await update.message.reply_text("User not found in DB by that phone/ID.")
             target = int(r["user_id"])
@@ -7226,7 +7296,7 @@ async def set_free(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         c = db(); cur = db_cursor(c)
         cur.execute("SELECT user_id FROM users WHERE user_id::text = %s OR phone LIKE %s", (val, f"%{clean_val}%" if clean_val else val))
-        r = cur.fetchone(); c.close()
+        r = cur.fetchone(); put_conn(c)
         if not r:
             return await update.message.reply_text("User not found in DB by that phone/ID.")
         target = int(r["user_id"])
@@ -7248,7 +7318,7 @@ async def add_teacher(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def log_availability(teacher_id: int, status: str):
     c = db(); cur = db_cursor(c)
     cur.execute("INSERT INTO teacher_availability_logs (teacher_id, status, timestamp) VALUES (%s, %s, %s)", (teacher_id, status, now_iso()))
-    c.commit(); c.close()
+    c.commit(); put_conn(c)
 
 async def set_available(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sender_id = update.message.from_user.id
@@ -7262,7 +7332,7 @@ async def set_available(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(clean_val) > 10: clean_val = clean_val[-10:]
         c = db(); cur = db_cursor(c)
         cur.execute("SELECT user_id, name FROM users WHERE user_id::text = %s OR phone LIKE %s", (val, f"%{clean_val}%" if clean_val else val))
-        r = cur.fetchone(); c.close()
+        r = cur.fetchone(); put_conn(c)
         if r:
             target_tid = int(r["user_id"])
             target_name = r.get("name") or f"Teacher {target_tid}"
@@ -7273,7 +7343,7 @@ async def set_available(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cur.execute("SELECT * FROM teachers WHERE teacher_id=%s", (target_tid,))
     row = cur.fetchone()
     if not row and not is_admin_user(target_tid):
-        c.close()
+        put_conn(c)
         return await update.message.reply_text("⛔ Teacher not registered. Use /addteacher first.")
     
     cur.execute("""
@@ -7282,7 +7352,7 @@ async def set_available(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ON CONFLICT (teacher_id) DO UPDATE SET 
             availability_status='live', last_availability_update=%s, teacher_name=%s
     """, (target_tid, target_name, now_iso(), now_iso(), target_name))
-    c.commit(); c.close()
+    c.commit(); put_conn(c)
     
     await log_availability(target_tid, 'live')
     
@@ -7301,7 +7371,7 @@ async def set_offline(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(clean_val) > 10: clean_val = clean_val[-10:]
         c = db(); cur = db_cursor(c)
         cur.execute("SELECT user_id, name FROM users WHERE user_id::text = %s OR phone LIKE %s", (val, f"%{clean_val}%" if clean_val else val))
-        r = cur.fetchone(); c.close()
+        r = cur.fetchone(); put_conn(c)
         if r:
             target_tid = int(r["user_id"])
             target_name = r.get("name") or f"Teacher {target_tid}"
@@ -7317,7 +7387,7 @@ async def set_offline(update: Update, context: ContextTypes.DEFAULT_TYPE):
             VALUES (%s, %s, 'offline', %s)
             ON CONFLICT (teacher_id) DO UPDATE SET availability_status='offline', last_availability_update=%s
         """, (target_tid, target_name, now_iso(), now_iso()))
-    c.commit(); c.close()
+    c.commit(); put_conn(c)
     
     await log_availability(target_tid, 'offline')
     
@@ -7342,7 +7412,7 @@ async def assign_teacher_subject(update: Update, context: ContextTypes.DEFAULT_T
         u_row = cur.fetchone()
         
         if not u_row:
-            c.close()
+            put_conn(c)
             return await update.message.reply_text(f"❌ User '{val}' not found in DB. Teacher must start the bot first!")
         
         tid = int(u_row["user_id"])
@@ -7361,7 +7431,7 @@ async def assign_teacher_subject(update: Update, context: ContextTypes.DEFAULT_T
             """, (tid, tname, subj, strm, now_iso()))
             c.commit()
             await update.message.reply_text(f"✨ New Faculty Added: {tname} ({tid}) with subject {subj} / {strm}")
-        c.close()
+        put_conn(c)
     except Exception as e:
         await update.message.reply_text(f"⚠️ Error: {e}")
 
@@ -7504,7 +7574,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 (student["id"],)
             )
             backlogs = [dict(r) for r in cur.fetchall()]
-            c.close()
+            put_conn(c)
             if not backlogs:
                 await update.message.reply_text("📭 No current backlogs", reply_markup=ReplyKeyboardMarkup(BACKLOGS_MENU, resize_keyboard=True))
             else:
@@ -7935,7 +8005,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             c = db(); cur = db_cursor(c)
             cur.execute("SELECT * FROM teachers ORDER BY priority_order DESC")
             all_teachers = cur.fetchall()
-            c.close()
+            put_conn(c)
             
             faculties = []
             for t_row in all_teachers:
@@ -7981,7 +8051,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         c = db(); cur = db_cursor(c)
         cur.execute("SELECT * FROM teachers")
         all_teachers = cur.fetchall()
-        c.close()
+        put_conn(c)
             
         selected_fac = None
         for f in all_teachers:
@@ -8208,7 +8278,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             c = db(); cur = db_cursor(c)
             last_24h = (datetime.now(UTC) - timedelta(hours=24)).isoformat()
             cur.execute("SELECT COUNT(*) as cnt FROM doubts WHERE user_id=%s AND created_at >= %s", (uid, last_24h))
-            r = cur.fetchone(); c.close()
+            r = cur.fetchone(); put_conn(c)
             d_count = r["cnt"] if r else 0
             
             if d_count >= 5:
@@ -8311,7 +8381,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 c = db(); cur = db_cursor(c)
                 cur.execute("SELECT * FROM teachers ORDER BY priority_order DESC")
                 all_teachers = cur.fetchall()
-                c.close()
+                put_conn(c)
                 faculties = []
                 for t_row in all_teachers:
                     t_subj = (t_row.get("subject_supported") or "").lower()
@@ -8462,7 +8532,7 @@ async def handle_teacher_dm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             cur.execute("SELECT user_id FROM users WHERE user_id::text = %s OR phone LIKE %s", (val, f"%{clean_val}%" if clean_val else val))
             r = cur.fetchone()
             if not r:
-                c.close()
+                put_conn(c)
                 del add_teacher_sessions[teacher_id]
                 return await update.message.reply_text(
                     f"❌ '{val}' se koi user nahi mila DB mein.\nTeacher ne pehle bot start kiya hona chahiye!\n"
@@ -8479,7 +8549,7 @@ async def handle_teacher_dm(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     subject_supported=excluded.subject_supported,
                     stream_supported=excluded.stream_supported
             """, (target_id, name, subj, strm, now_iso()))
-            c.commit(); c.close()
+            c.commit(); put_conn(c)
             
             await log_availability(target_id, 'offline')
             
@@ -8651,6 +8721,7 @@ def run_flask_server():
     flask_app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
 
 def main():
+    init_db_pool()
     flask_thread = Thread(target=run_flask_server, daemon=True)
     flask_thread.start()
     print("✅ Flask thread started")
