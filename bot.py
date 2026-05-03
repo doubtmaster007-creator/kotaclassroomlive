@@ -4872,6 +4872,39 @@ async def run_mentorship_scheduler(bot):
                             await bot.send_message(chat_id=int(student["telegram_id"]), text=f"Bhul gaye kya? ⏳ {slot.get('subject', 'Class')} ka HW abhi tak nahi aaya. Bhej do!")
                         markers[hw2_key] = True
 
+                # Live Task Timer Updates
+                c_timer = db(); cur_timer = db_cursor(c_timer)
+                cur_timer.execute("SELECT * FROM tasks WHERE student_id=%s AND status='in_progress' AND scheduled_date=%s", (student["id"], now_dt.date()))
+                active_tasks = cur_timer.fetchall()
+                for t in active_tasks:
+                    if t.get("is_paused"):
+                        p_at = t["paused_at"]
+                        if p_at:
+                            if p_at.tzinfo is None: p_at = IST.localize(p_at)
+                            if (now_dt - p_at).total_seconds() / 60 >= 10:
+                                cur_timer.execute("UPDATE tasks SET is_paused=false, updated_at=now() WHERE id=%s", (t["id"],))
+                                c_timer.commit()
+                                await bot.send_message(chat_id=int(student["telegram_id"]), text=f"⏰ 10 minute break over! <b>{t['subject']}</b> task resume ho raha hai.", parse_mode="HTML")
+                        continue
+                    
+                    est_end = t["estimated_end_time"]
+                    if est_end:
+                        if est_end.tzinfo is None: est_end = IST.localize(est_end)
+                        rem = int((est_end - now_dt).total_seconds() / 60)
+                        if rem <= 0:
+                            cur_timer.execute("UPDATE tasks SET status='awaiting_status', updated_at=now() WHERE id=%s", (t["id"],))
+                            c_timer.commit()
+                            await bot.send_message(chat_id=int(student["telegram_id"]), text=f"🔔 <b>Time's up for:</b> {t['subject']}\n\nKya aapne ye poora kar liya?", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Yes, Done", callback_data=f"m_done_{t['id']}")],[InlineKeyboardButton("⏳ No, Extend 15m", callback_data=f"m_ext_{t['id']}")] ]), parse_mode="HTML")
+                            try: await bot.unpin_chat_message(chat_id=int(student["telegram_id"]), message_id=t["timer_message_id"])
+                            except: pass
+                        else:
+                            try:
+                                kb = [[InlineKeyboardButton("✅ Done Early", callback_data=f"m_done_{t['id']}")], [InlineKeyboardButton("⏸ Pause (10m)", callback_data=f"m_pause_{t['id']}"), InlineKeyboardButton("⏳ Extend (15m)", callback_data=f"m_ext_{t['id']}")] ]
+                                msg_text = f"🚀 <b>TASK IN PROGRESS</b>\n━━━━━━━━━━━━━━━━━━━━\n\n📖 <b>Subject:</b> {t['subject']}\n📝 <b>Task:</b> {t['description']}\n\n⏱ <b>Time Remaining:</b> {rem} mins\n🏁 <b>Target End:</b> {est_end.strftime('%I:%M %p')}"
+                                await bot.edit_message_text(chat_id=int(student["telegram_id"]), message_id=t["timer_message_id"], text=msg_text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
+                            except: pass
+                put_conn(c_timer)
+
                 # Manual Scheduler Task Follow-ups
                 today_tasks = get_student_tasks(student["id"], scheduled_date=now_dt.date())
                 manual_tasks = [t for t in today_tasks if t.get("source") == "MANUAL_SCHEDULER"]
