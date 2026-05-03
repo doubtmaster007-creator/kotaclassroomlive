@@ -127,6 +127,7 @@ PLANNER_MODEL = os.getenv("MENTORSHIP_MODEL", MODEL_HAIKU)
 MENTORSHIP_DASHBOARD_KB = [
     ["Daily Scheduler", "Backlogs"],
     ["Show My Self-Study Planner", "Others"],
+    ["✨ Wizard Refresh"],
     ["Back", "Ask Doubt"]
 ]
 
@@ -159,6 +160,7 @@ BACKLOGS_MENU = [["Check Backlogs", "Add Backlogs"], ["Back", "Ask Doubt"]]
 MENTORSHIP_TABS_KB = [
     ["Daily Scheduler", "Backlogs Coverage"],
     ["Show My Self-Study Planner"],
+    ["✨ Wizard Refresh"],
     ["Back", "Ask Doubt"]
 ]
 
@@ -5267,7 +5269,8 @@ async def mentorship(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "📚 *Backlogs Coverage* — Cover old topics\n"
                     "📅 *Daily Study Planner* — AI-generated schedule\n"
                     "📝 *Daily Scheduler* — Manual sequential plan\n"
-                    "📋 *Show My Planner* — Check today's tasks"
+                    "📋 *Show My Planner* — Check today's tasks\n\n"
+                    "✨ *Wizard Refresh* — Clean up chat clutter"
                 )
                 
                 await cleanup_all_transient(uid, context)
@@ -5794,6 +5797,16 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
                 parse_mode="HTML"
             )
         elif text == "Back":
+            await mentorship(update, context)
+        elif text == "✨ Wizard Refresh":
+            # 1. Delete user command message
+            try: await update.message.delete()
+            except: pass
+            
+            # 2. Cleanup all transient messages
+            await cleanup_all_transient(uid, context)
+            
+            # 3. Refresh Dashboard
             await mentorship(update, context)
         return True
 
