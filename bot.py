@@ -5564,7 +5564,7 @@ async def generate_ai_task_planner(update, context, student):
 async def generate_backlog_ai_plan(update, student: Dict[str, Any], backlog: Dict[str, Any]) -> Dict[str, Any]:
     payload = build_backlog_plan_payload(student, backlog)
     try:
-        planner = call_json_prompt(BACKLOG_TASK_PLANNER_PROMPT, payload)
+        planner = await asyncio.to_thread(call_json_prompt, BACKLOG_TASK_PLANNER_PROMPT, payload)
     except Exception as e:
         logger.error(f"Backlog AI planner generation failed: {e}")
         planner = fallback_backlog_plan(backlog)
