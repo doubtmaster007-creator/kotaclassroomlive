@@ -2437,6 +2437,16 @@ def init_db_schema():
     try:
         cur.execute("ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_source_check;")
         cur.execute("ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_type_check;")
+        cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS start_time TIMESTAMP;")
+        cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS estimated_end_time TIMESTAMP;")
+        cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS actual_end_time TIMESTAMP;")
+        cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
+        cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS is_paused BOOLEAN DEFAULT FALSE;")
+        cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS paused_at TIMESTAMP;")
+        cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS pause_count INT DEFAULT 0;")
+        cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS extension_minutes INT DEFAULT 0;")
+        cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS extension_count INT DEFAULT 0;")
+        cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS timer_message_id INT;")
         c.commit()
     except:
         c.rollback()
