@@ -2263,6 +2263,26 @@ async def wizard_step(update: Update, context: ContextTypes.DEFAULT_TYPE, text: 
     save_mentorship_temp(uid, temp)
     return msg
 
+async def track_transient_msg(uid: int, message_id: int):
+    """Adds a message ID to the list of transient messages to be cleaned up later."""
+    u_row = get_user(uid)
+    temp = get_mentorship_temp(u_row)
+    ids = temp.setdefault("transient_msg_ids", [])
+    if message_id not in ids:
+        ids.append(message_id)
+    save_mentorship_temp(uid, temp)
+
+async def cleanup_all_transient(uid: int, context: ContextTypes.DEFAULT_TYPE):
+    """Deletes all tracked transient messages for the user."""
+    u_row = get_user(uid)
+    temp = get_mentorship_temp(u_row)
+    ids = temp.get("transient_msg_ids", [])
+    for mid in ids:
+        try: await context.bot.delete_message(chat_id=uid, message_id=mid)
+        except: pass
+    temp["transient_msg_ids"] = []
+    save_mentorship_temp(uid, temp)
+
 async def reset_to_main_menu_with_processing(update: Update, uid: int, message: str = "Main menu par wapas. 👇"):
     try:
         await update.message.reply_text("Please wait, under process... ⏳")
@@ -5241,6 +5261,7 @@ async def mentorship(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "📋 *Show My Planner* — Check today's tasks"
                 )
                 
+                await cleanup_all_transient(uid, context)
                 await update.message.reply_text(
                     dashboard_text,
                     parse_mode="Markdown",
@@ -5273,10 +5294,15 @@ async def mentorship(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     upd_user(uid, {"mentorship_mode": "registering", "step": "mentor_name"})
     clear_mentorship_temp(uid)
-    await update.message.reply_text(
+    msg = await update.message.reply_text(
         "✨ JEE Mentorship Program mein swagat hai!\n\nRegistration shuru karte hain.\nStep 1: Aapka poora naam kya hai? (First Name + Last Name)",
         reply_markup=ReplyKeyboardMarkup([["Cancel Registration"]], resize_keyboard=True)
     )
+    # Track registration start msg
+    u_row = get_user(uid)
+    temp = get_mentorship_temp(u_row)
+    temp["last_wizard_msg_id"] = msg.message_id
+    save_mentorship_temp(uid, temp)
 
 async def finish_registration_and_ask_first_timetable(update: Update, uid: int):
     upd_user(uid, {"step": "mentor_ready", "mentorship_mode": "active"})
@@ -5393,12 +5419,14 @@ async def accept_student(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Parent verification ke baad aapka dashboard fully active ho jayega. ✨"
             )
             
-            await context.bot.send_message(
+            msg = await context.bot.send_message(
                 chat_id=sid_int, 
                 text=approval_msg,
                 parse_mode="HTML",
                 reply_markup=ReplyKeyboardMarkup([["Skip Parent Verification"], ["My Personal Mentor", "Ask Doubt"]], resize_keyboard=True)
             )
+            # Track approval msg as transient so it can be cleaned when they enter dashboard
+            await track_transient_msg(sid_int, msg.message_id)
         await update.message.reply_text(f"Student {student['name']} approved successfully. Parent link sent to student.")
     except Exception as e:
         logger.error(f"Error in accept_student: {e}", exc_info=True)
@@ -5875,34 +5903,37 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
     if step == "mentor_backlog_time":
         if text == "Back":
             upd_user(uid, {"step": "mentor_backlog_completion"})
-            await update.message.reply_text("Kitne dino mein complete karna chahte ho?\nExample: 10", reply_markup=ReplyKeyboardMarkup([["7", "10", "15", "30"], ["Back"]], resize_keyboard=True))
+            await wizard_step(update, context, "Kitne dino mein complete karna chahte ho?\nExample: 10", kb=[["7", "10", "15", "30"], ["Back"]])
             return True
         if text != "Skip" and not parse_time_hhmm(text):
-            await update.message.reply_text(
-                "Simple time bhejo. Example: 9 PM or 5 AM. Agar sure nahi ho to Skip.",
-                reply_markup=ReplyKeyboardMarkup(BACKLOG_TIME_OPTIONS, resize_keyboard=True)
-            )
+            await wizard_step(update, context, "Simple time bhejo. Example: 9 PM or 5 AM. Agar sure nahi ho to Skip.", kb=BACKLOG_TIME_OPTIONS)
             return True
         temp.setdefault("backlog_data", {})["preferred_time"] = text
         save_mentorship_temp(uid, temp)
         upd_user(uid, {"step": "mentor_backlog_start"})
-        await update.message.reply_text(
-            "Backlog aaj se start karna hai ya next day se?",
-            reply_markup=ReplyKeyboardMarkup(BACKLOG_START_OPTIONS, resize_keyboard=True)
-        )
+        await wizard_step(update, context, "Backlog aaj se start karna hai ya next day se?", kb=BACKLOG_START_OPTIONS)
         return True
 
     if step == "mentor_backlog_start":
         if text == "Back":
             upd_user(uid, {"step": "mentor_backlog_time"})
-            await update.message.reply_text(
-                "Is backlog ko din me kis time prefer karoge?\nExample: 9 PM or 5 AM\nAgar sure nahi ho to Skip.",
-                reply_markup=ReplyKeyboardMarkup(BACKLOG_TIME_OPTIONS, resize_keyboard=True)
-            )
+            await wizard_step(update, context, "Is backlog ko din me kis time prefer karoge?\nExample: 9 PM or 5 AM\nAgar sure nahi ho to Skip.", kb=BACKLOG_TIME_OPTIONS)
             return True
         if text not in {"Start Today", "Start Next Day"}:
-            await update.message.reply_text("Choose Start Today or Start Next Day.", reply_markup=ReplyKeyboardMarkup(BACKLOG_START_OPTIONS, resize_keyboard=True))
+            await wizard_step(update, context, "Choose Start Today or Start Next Day.", kb=BACKLOG_START_OPTIONS)
             return True
+        
+        # Cleanup last wizard msg before AI generation starts
+        last_id = temp.get("last_wizard_msg_id")
+        if last_id:
+            try: await context.bot.delete_message(chat_id=uid, message_id=last_id)
+            except: pass
+            temp["last_wizard_msg_id"] = None
+            save_mentorship_temp(uid, temp)
+        
+        # Also delete the user's final response message
+        try: await update.message.delete()
+        except: pass
 
         backlog_info = temp.get("backlog_data", {})
         raw_share = backlog_info.get("share", "")
