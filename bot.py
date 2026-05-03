@@ -157,14 +157,14 @@ BACKLOGS_MENU = [["Check Backlogs", "Add Backlogs"], ["Back", "Ask Doubt"]]
 
 # Integrated Two-Tab Mentorship UI
 MENTORSHIP_TABS_KB = [
-    ["Daily Scheduler", "Backlogs"],
+    ["Daily Scheduler", "Backlogs Coverage"],
     ["Show My Self-Study Planner"],
     ["Back", "Ask Doubt"]
 ]
 
 TAB1_BACKLOG_OPTS_KB = [
-    ["Add Next Backlogs", "Generate AI Plan (Daily)"],
-    ["Back One Step", "Switch to Daily Planner"]
+    ["Add Next Backlog", "View Backlogs"],
+    ["Back to Dashboard"]
 ]
 BACKLOG_TIME_OPTIONS = [["Skip"], ["Back"]]
 BACKLOG_START_OPTIONS = [["Start Today", "Start Next Day"], ["Back"]]
@@ -4245,6 +4245,8 @@ async def send_backlog_day_plan(bot, student: Dict[str, Any], backlog: Dict[str,
             "source": "BACKLOG",
             "scheduled_date": today_ist_date(),
             "estimated_minutes": mins,
+            "allotted_minutes": mins,
+            "scheduled_start_time": backlog.get("preferred_time"),
             "mentor_instruction": f"Backlog Day {label_day}",
         })
 
@@ -4256,11 +4258,23 @@ async def send_backlog_day_plan(bot, student: Dict[str, Any], backlog: Dict[str,
     })
     recalc_daily_log(student["id"], today_ist_date())
 
+    # Get the ID of the main task (today's task) to link the 'Start' button
+    c = db(); cur = db_cursor(c)
+    cur.execute("SELECT id FROM tasks WHERE student_id=%s AND source='BACKLOG' ORDER BY created_at DESC LIMIT 1", (student["id"],))
+    row = cur.fetchone()
+    main_task_id = row[0] if row else None
+    put_conn(c)
+
     prefix = "Aaj ka backlog task:" if not include_previous_day else "Previous pending + aaj ka combined backlog task:"
+    kb = []
+    if main_task_id:
+        kb = [[InlineKeyboardButton("🚀 Start Backlog Now", callback_data=f"m_start_{main_task_id}")]]
+    
     await bot.send_message(
         chat_id=int(student["telegram_id"]),
-        text=f"{prefix}\n\n" + "\n".join(lines) + f"\n\nTotal load: {total_minutes} min",
-        reply_markup=ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True)
+        text=f"<b>{prefix}</b>\n\n" + "\n".join(lines) + f"\n\n⏱ <b>Total load:</b> {total_minutes} min",
+        reply_markup=InlineKeyboardMarkup(kb) if kb else ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True),
+        parse_mode="HTML"
     )
     return True
 
@@ -4443,6 +4457,48 @@ async def handle_mentorship_callbacks(update: Update, context: ContextTypes.DEFA
         c.commit(); put_conn(c)
         await query.answer("⏸ 10 mins break started.")
         await query.edit_message_text(f"⏸ <b>TASK PAUSED (10m Break)</b>\n\nTask: {task['description']}\n\nResuming automatically soon...", parse_mode="HTML")
+
+    elif data.startswith("m_start_"):
+        task_id = data.split("_")[2]
+        c = db(); cur = db_cursor(c)
+        cur.execute("SELECT * FROM tasks WHERE id=%s", (task_id,))
+        task = cur.fetchone()
+        if not task:
+            put_conn(c); return
+            
+        if task.get("status") == "done":
+            await query.answer("⚠️ Task complete ho chuka hai.")
+            put_conn(c); return
+            
+        now = datetime.now(IST)
+        allotted = task.get("allotted_minutes") or 60
+        end_time = now + timedelta(minutes=allotted)
+        
+        cur.execute(
+            "UPDATE tasks SET status='in_progress', start_time=%s, estimated_end_time=%s, updated_at=now() WHERE id=%s",
+            (now, end_time, task_id)
+        )
+        c.commit(); put_conn(c)
+        
+        await query.answer("🚀 Backlog Started! Focus on your goal.")
+        
+        kb = [
+            [InlineKeyboardButton("✅ Done Early", callback_data=f"m_done_{task_id}")],
+            [InlineKeyboardButton("⏸ Pause (10m)", callback_data=f"m_pause_{task_id}"),
+             InlineKeyboardButton("⏳ Extend (15m)", callback_data=f"m_ext_{task_id}")]
+        ]
+        
+        msg_text = (
+            f"🚀 <b>BACKLOG TASK STARTED</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"📖 <b>Subject:</b> {task['subject']}\n"
+            f"📝 <b>Task:</b> {task['description']}\n\n"
+            f"⏱ <b>Time Remaining:</b> {allotted} mins\n"
+            f"🏁 <b>Target End:</b> {end_time.strftime('%I:%M %p')}"
+        )
+        await query.edit_message_text(msg_text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
+        try: await context.bot.pin_chat_message(chat_id=uid, message_id=query.message.message_id)
+        except: pass
 
     elif data.startswith("m_ext_"):
         task_id = data.split("_")[2]
@@ -4847,6 +4903,7 @@ async def run_mentorship_scheduler(bot):
             students = get_approved_students()
             for student in students:
                 await process_pending_rollover(student)
+                await process_backlog_delivery(bot, student)
                 
                 # Check parent verification timeout
                 if student.get("parent_verification_requested_at"):
@@ -5601,7 +5658,7 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         if text == "Ask Doubt":
             upd_user(uid, {"step": "subject"})
             await update.message.reply_text("Select Subject:", reply_markup=ReplyKeyboardMarkup(SUBJECT_OPTIONS, resize_keyboard=True))
-        elif text == "Backlogs":
+        elif text in {"Backlogs", "Backlogs Coverage"}:
             upd_user(uid, {"step": "mentor_backlog_ready"})
             await update.message.reply_text(
                 "📚 *BACKLOGS COVERAGE*\n"
@@ -5829,21 +5886,13 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         return True
 
     if step == "mentor_backlog_options":
-        if text == "Add Next Backlogs":
+        if text in {"Add Next Backlogs", "Add Next Backlog"}:
             upd_user(uid, {"step": "mentor_backlog_ready"})
             await update.message.reply_text("Ready to add another backlog?", reply_markup=ReplyKeyboardMarkup([["Yes", "No"], ["Back"]], resize_keyboard=True))
-        elif text == "Generate AI Plan (Daily)":
-            upd_user(uid, {"step": "mentor_planner_date"})
-            await update.message.reply_text("📅 *Daily Study Planner*\n\nEnter date for class? (Format: DD/MM/YYYY)", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True), parse_mode="Markdown")
-        elif text == "Switch to Daily Planner":
-            upd_user(uid, {"step": "mentor_planner_ready"})
-            await update.message.reply_text(
-                "📅 *DAILY STUDY PLANNER*\n"
-                "━━━━━━━━━━━━━━━━━━━━\n\n"
-                "Niche diye gaye options mein se chune:",
-                reply_markup=ReplyKeyboardMarkup([["Back", "Ask Doubt"]], resize_keyboard=True),
-                parse_mode="HTML"
-            )
+        elif text == "View Backlogs":
+            await handle_view_backlogs(update, context)
+        elif text in {"Back to Dashboard", "Back"}:
+            await mentorship(update, context)
         return True
 
     # --- DAILY SCHEDULER (MANUAL) FLOW ---
