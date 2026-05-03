@@ -4404,7 +4404,7 @@ async def handle_mentorship_callbacks(update: Update, context: ContextTypes.DEFA
     if not student: return
     
     if data.startswith("m_done_"):
-        task_id = int(data.split("_")[2])
+        task_id = data.split("_")[2]
         c = db(); cur = db_cursor(c)
         cur.execute("UPDATE tasks SET status='done', actual_end_time=now(), updated_at=now() WHERE id=%s", (task_id,))
         c.commit(); put_conn(c)
@@ -4416,7 +4416,7 @@ async def handle_mentorship_callbacks(update: Update, context: ContextTypes.DEFA
         await start_next_task(context.bot, student["id"])
 
     elif data.startswith("m_pause_"):
-        task_id = int(data.split("_")[2])
+        task_id = data.split("_")[2]
         c = db(); cur = db_cursor(c)
         cur.execute("SELECT * FROM tasks WHERE id=%s", (task_id,))
         task = cur.fetchone()
@@ -4430,7 +4430,7 @@ async def handle_mentorship_callbacks(update: Update, context: ContextTypes.DEFA
         await query.edit_message_text(f"⏸ <b>TASK PAUSED (10m Break)</b>\n\nTask: {task['description']}\n\nResuming automatically soon...", parse_mode="HTML")
 
     elif data.startswith("m_ext_"):
-        task_id = int(data.split("_")[2])
+        task_id = data.split("_")[2]
         c = db(); cur = db_cursor(c)
         cur.execute("SELECT * FROM tasks WHERE id=%s", (task_id,))
         task = cur.fetchone()
@@ -6484,7 +6484,7 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         if text == "Yes":
             if task_id:
                 try:
-                    update_task(int(task_id), {"status": "done", "completed_at": now_iso()})
+                    update_task(str(task_id), {"status": "done", "completed_at": now_iso()})
                     recalc_daily_log(student["id"], today_ist_date())
                 except: pass
             await update.message.reply_text("🌟 You are a STAR! Keep it up, achiever! 🚀", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_TABS_KB, resize_keyboard=True))
