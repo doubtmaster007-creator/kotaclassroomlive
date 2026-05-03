@@ -5923,7 +5923,7 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
                 return True
             except Exception as fe:
                 logger.error(f"Error in Finish Scheduler: {fe}", exc_info=True)
-                await update.message.reply_text("⚠️ Plan save karte waqt error aaya. Please try again.")
+                await update.message.reply_text(f"⚠️ Plan save karte waqt error aaya.\n\nError Detail: {str(fe)[:800]}\n\nPlease share this error message.")
                 return True
 
         await update.message.reply_text(
