@@ -6059,7 +6059,7 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         
         try:
             mins = int(re.sub(r"\D", "", text))
-            temp["scheduler_current_task"]["minutes"] = mins
+            temp.setdefault("scheduler_current_task", {})["minutes"] = mins
             save_mentorship_temp(uid, temp)
             
             # Add to list
@@ -6093,7 +6093,7 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
             except: pass
 
             tasks_data = temp.get("scheduler_tasks", [])
-            # Save to DB... (Existing logic continues)
+            # Save to DB... 
             save_mentorship_temp(uid, temp)
             
             upd_user(uid, {"step": "mentor_scheduler_priority"})
@@ -6101,8 +6101,6 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
                 "🚩 Is task ki priority kya hai?",
                 reply_markup=ReplyKeyboardMarkup(PRIORITY_OPTIONS, resize_keyboard=True)
             )
-        except:
-            await update.message.reply_text("❌ Kripya valid number (minutes) enter karein.")
         return True
 
     if step == "mentor_scheduler_priority":
