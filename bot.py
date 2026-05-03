@@ -4406,6 +4406,15 @@ async def handle_mentorship_callbacks(update: Update, context: ContextTypes.DEFA
     if data.startswith("m_done_"):
         task_id = data.split("_")[2]
         c = db(); cur = db_cursor(c)
+        cur.execute("SELECT * FROM tasks WHERE id=%s", (task_id,))
+        task = cur.fetchone()
+        if task.get("status") == "done":
+            await query.answer("⚠️ Ye task pehle hi complete ho chuka hai.", show_alert=True)
+            put_conn(c); return
+        if task.get("is_paused"):
+            await query.answer("⚠️ Task abhi paused hai. Pehle isko auto-resume hone dein.", show_alert=True)
+            put_conn(c); return
+            
         cur.execute("UPDATE tasks SET status='done', actual_end_time=now(), updated_at=now() WHERE id=%s", (task_id,))
         c.commit(); put_conn(c)
         
@@ -4420,6 +4429,12 @@ async def handle_mentorship_callbacks(update: Update, context: ContextTypes.DEFA
         c = db(); cur = db_cursor(c)
         cur.execute("SELECT * FROM tasks WHERE id=%s", (task_id,))
         task = cur.fetchone()
+        if task.get("status") == "done":
+            await query.answer("⚠️ Ye task pehle hi complete ho chuka hai.", show_alert=True)
+            put_conn(c); return
+        if task.get("is_paused"):
+            await query.answer("⚠️ Task pehle se hi paused hai.", show_alert=True)
+            put_conn(c); return
         if task["pause_count"] >= 1:
             await query.answer("⚠️ Aap sirf ek baar pause le sakte hain per task.", show_alert=True)
             put_conn(c); return
@@ -4434,6 +4449,12 @@ async def handle_mentorship_callbacks(update: Update, context: ContextTypes.DEFA
         c = db(); cur = db_cursor(c)
         cur.execute("SELECT * FROM tasks WHERE id=%s", (task_id,))
         task = cur.fetchone()
+        if task.get("status") == "done":
+            await query.answer("⚠️ Ye task pehle hi complete ho chuka hai.", show_alert=True)
+            put_conn(c); return
+        if task.get("is_paused"):
+            await query.answer("⚠️ Task abhi paused hai. Pehle isko auto-resume hone dein.", show_alert=True)
+            put_conn(c); return
         if task["extension_count"] >= 2:
             await query.answer("⚠️ Max 2 extensions allowed.", show_alert=True)
             put_conn(c); return
