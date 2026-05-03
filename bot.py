@@ -2436,8 +2436,10 @@ def init_db_schema():
     c = db(); cur = c.cursor()
     try:
         cur.execute("ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_source_check;")
+        cur.execute("ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_type_check;")
+        c.commit()
     except:
-        pass
+        c.rollback()
         
     try:
         cur.execute("ALTER TABLE daily_logs ADD COLUMN IF NOT EXISTS nudge_1_sent BOOLEAN DEFAULT FALSE;")
@@ -5898,7 +5900,7 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
                     create_task({
                         "student_id": student["id"],
                         "daily_log_id": log["id"],
-                        "type": "MANUAL",
+                        "type": "OTHER",
                         "subject": t["subject"],
                         "subject_category": t.get("category"),
                         "topic": "General",
