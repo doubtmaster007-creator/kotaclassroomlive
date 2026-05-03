@@ -5893,8 +5893,10 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
                     create_task({
                         "student_id": student["id"],
                         "daily_log_id": log["id"],
+                        "type": "MANUAL",
                         "subject": t["subject"],
-                        "subject_category": t["category"],
+                        "subject_category": t.get("category"),
+                        "topic": "General",
                         "description": t["description"],
                         "allotted_minutes": t["minutes"],
                         "estimated_minutes": t["minutes"],
