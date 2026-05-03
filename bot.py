@@ -5656,12 +5656,12 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
 
     # TAB 1: BACKLOGS FLOW
     if step == "mentor_backlog_ready":
-        if text == "Add Backlog":
+        if text in {"Add Backlog", "Yes"}:
             upd_user(uid, {"step": "mentor_backlog_share"})
             await update.message.reply_text("Enter Subject - Backlog Share:\nExample: Biology - Chapter 5,6,7 (Photosynthesis & Respiration)", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True))
         elif text == "View Backlogs":
             await handle_view_backlogs(update, context)
-        elif text == "Back":
+        elif text in {"Back", "No"}:
             await mentorship(update, context)
         return True
 
