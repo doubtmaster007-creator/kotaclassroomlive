@@ -4229,11 +4229,12 @@ async def send_backlog_day_plan(bot, student: Dict[str, Any], backlog: Dict[str,
 
     log = get_or_create_daily_log(student["id"], today_ist_date())
     lines = []
+    main_task_id = None
     for label_day, item in tasks_for_message:
         desc = item.get("description") or backlog.get("topic") or "Backlog task"
         mins = max(30, int(item.get("estimated_minutes", 60) or 60))
         lines.append(f"Day {label_day}: {desc} ({mins}m)")
-        create_task({
+        new_t = create_task({
             "student_id": student["id"],
             "daily_log_id": log["id"],
             "type": "BACKLOG",
@@ -4249,6 +4250,8 @@ async def send_backlog_day_plan(bot, student: Dict[str, Any], backlog: Dict[str,
             "scheduled_start_time": backlog.get("preferred_time"),
             "mentor_instruction": f"Backlog Day {label_day}",
         })
+        if label_day == day_number:
+            main_task_id = new_t["id"]
 
     update_backlog(backlog["id"], {
         "status": "in_progress",
@@ -4258,23 +4261,17 @@ async def send_backlog_day_plan(bot, student: Dict[str, Any], backlog: Dict[str,
     })
     recalc_daily_log(student["id"], today_ist_date())
 
-    # Get the ID of the main task (today's task) to link the 'Start' button
-    c = db(); cur = db_cursor(c)
-    cur.execute("SELECT id FROM tasks WHERE student_id=%s AND source='BACKLOG' ORDER BY created_at DESC LIMIT 1", (student["id"],))
-    row = cur.fetchone()
-    main_task_id = row[0] if row else None
-    put_conn(c)
-
-    prefix = "Aaj ka backlog task:" if not include_previous_day else "Previous pending + aaj ka combined backlog task:"
+    prefix = "📅 *DAY 1: BACKLOG HYBRID PLAN*" if not include_previous_day else "🔄 *MERGED BACKLOG PLAN*"
+    
     kb = []
     if main_task_id:
         kb = [[InlineKeyboardButton("🚀 Start Backlog Now", callback_data=f"m_start_{main_task_id}")]]
     
     await bot.send_message(
         chat_id=int(student["telegram_id"]),
-        text=f"<b>{prefix}</b>\n\n" + "\n".join(lines) + f"\n\n⏱ <b>Total load:</b> {total_minutes} min",
+        text=f"{prefix}\n━━━━━━━━━━━━━━━━━━━━\n\n" + "\n".join(lines) + f"\n\n⏱ *Total load:* {total_minutes} min",
         reply_markup=InlineKeyboardMarkup(kb) if kb else ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True),
-        parse_mode="HTML"
+        parse_mode="Markdown"
     )
     return True
 
@@ -5565,14 +5562,12 @@ async def generate_ai_task_planner(update, context, student):
         await stop_delayed_wait_message(wait_task)
 
 async def generate_backlog_ai_plan(update, student: Dict[str, Any], backlog: Dict[str, Any]) -> Dict[str, Any]:
-    wait_task = start_delayed_wait_message(update.message, "Please wait, under process...")
     payload = build_backlog_plan_payload(student, backlog)
     try:
         planner = call_json_prompt(BACKLOG_TASK_PLANNER_PROMPT, payload)
     except Exception as e:
         logger.error(f"Backlog AI planner generation failed: {e}")
         planner = fallback_backlog_plan(backlog)
-    await stop_delayed_wait_message(wait_task)
     cleaned_tasks = []
     for idx, item in enumerate(planner.get("tasks", []), start=1):
         estimated_minutes = max(30, int(item.get("estimated_minutes", 60) or 60))
@@ -5870,19 +5865,36 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
             "last_sent_day": 0,
             "status": "pending",
         })
+        # 1. Flash message
+        status_msg = await update.message.reply_text(
+            "✅ *Backlog Saved!*\n\n🤖 AI based Hybrid Planner generate ho raha hai, kripya intezar karein...",
+            parse_mode="Markdown"
+        )
+        
+        # 2. Generate AI Plan
         planner = await generate_backlog_ai_plan(update, student, backlog)
         update_backlog(backlog["id"], {"plan_json": json.dumps(planner, ensure_ascii=True)})
+        
         temp["backlog_data"] = {}
         save_mentorship_temp(uid, temp)
         upd_user(uid, {"step": "mentor_backlog_options"})
-        await update.message.reply_text(
-            f"Backlog saved.\n\n*{subject}* - {topic}\nLevel: {backlog_info.get('target_level', 'JEE Mains')}\nDays: {backlog_info.get('completion_days', 7)}\nHours/day: {backlog_info.get('hours', '2')}\nPreferred time: {resolved_time}\nStart date: {start_date.strftime('%d/%m/%Y')}",
-            reply_markup=ReplyKeyboardMarkup(TAB1_BACKLOG_OPTS_KB, resize_keyboard=True),
-            parse_mode="Markdown"
-        )
+        
+        # 3. Remove flash message
+        try:
+            await context.bot.delete_message(chat_id=uid, message_id=status_msg.message_id)
+        except:
+            pass
+
+        # 4. Show Plan
         if text == "Start Today":
             latest_backlog = get_backlog(backlog["id"]) or backlog
             await send_backlog_day_plan(context.bot, student, latest_backlog, 1, include_previous_day=False)
+        else:
+            await update.message.reply_text(
+                f"✅ *Backlog AI Plan Ready!*\n\n📚 *{subject}* - {topic}\n🚀 Target: {start_date.strftime('%d/%m/%Y')} se shuru hoga.",
+                reply_markup=ReplyKeyboardMarkup(TAB1_BACKLOG_OPTS_KB, resize_keyboard=True),
+                parse_mode="Markdown"
+            )
         return True
 
     if step == "mentor_backlog_options":
