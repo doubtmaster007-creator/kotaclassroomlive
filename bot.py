@@ -5877,7 +5877,7 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
             upd_user(uid, {"step": "mentor_scheduler_subject"})
             await update.message.reply_text("Next subject select karein:", reply_markup=ReplyKeyboardMarkup(SCHEDULER_SUBJECT_OPTIONS, resize_keyboard=True))
             return True
-        
+        if text == "Finish & Start Scheduler":
             try:
                 student = get_student_by_telegram(uid)
                 if not student:
