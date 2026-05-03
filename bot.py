@@ -2437,6 +2437,8 @@ def init_db_schema():
     try:
         cur.execute("ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_source_check;")
         cur.execute("ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_type_check;")
+        cur.execute("ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_status_check;")
+        cur.execute("ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_priority_check;")
         cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS start_time TIMESTAMP;")
         cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS estimated_end_time TIMESTAMP;")
         cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS actual_end_time TIMESTAMP;")
