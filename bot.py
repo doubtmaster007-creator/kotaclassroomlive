@@ -2435,6 +2435,11 @@ def init_db_schema():
     """Ensure database schema is up-to-date with necessary columns."""
     c = db(); cur = c.cursor()
     try:
+        cur.execute("ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_source_check;")
+    except:
+        pass
+        
+    try:
         cur.execute("ALTER TABLE daily_logs ADD COLUMN IF NOT EXISTS nudge_1_sent BOOLEAN DEFAULT FALSE;")
         cur.execute("ALTER TABLE daily_logs ADD COLUMN IF NOT EXISTS nudge_2_sent BOOLEAN DEFAULT FALSE;")
         cur.execute("ALTER TABLE daily_logs ADD COLUMN IF NOT EXISTS nudge_3_sent BOOLEAN DEFAULT FALSE;")
