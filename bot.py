@@ -2448,6 +2448,9 @@ def init_db_schema():
         cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS pause_count INT DEFAULT 0;")
         cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS extension_minutes INT DEFAULT 0;")
         cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS extension_count INT DEFAULT 0;")
+        cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS allotted_minutes INT DEFAULT 0;")
+        cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS scheduled_start_time TEXT;")
+        cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS mentor_instruction TEXT;")
         cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS timer_message_id INT;")
         c.commit()
     except:
