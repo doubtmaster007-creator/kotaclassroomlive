@@ -5271,13 +5271,23 @@ async def mentorship(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 done_count = sum(1 for t in tasks if t["status"] == "done")
                 pending_count = sum(1 for t in tasks if t["status"] != "done")
                 
-                # Active Task Info
-                active_task_str = "No active task"
-                active_task = next((t for t in tasks if t["status"] == "in_progress"), None)
-                if active_task:
-                    active_task_str = f"🔥 {active_task['subject']}: {active_task['description'][:20]}..."
-                elif pending_count > 0:
-                    active_task_str = "Ready to start next task? 🚀"
+                status_section = ""
+                if (done_count + pending_count) > 0:
+                    # Active Task Info
+                    active_task_str = "No active task"
+                    active_task = next((t for t in tasks if t["status"] == "in_progress"), None)
+                    if active_task:
+                        active_task_str = f"🔥 {active_task['subject']}: {active_task['description'][:20]}..."
+                    elif pending_count > 0:
+                        active_task_str = "Ready to start next task? 🚀"
+
+                    status_section = (
+                        "📊 <b>𝗧𝗢𝗗𝗔𝗬'𝗦 𝗦𝗧𝗔𝗧𝗨𝗦</b>\n"
+                        f"✅ {done_count} Completed | ⏳ {pending_count} Pending\n"
+                        f"📍 <i>{active_task_str}</i>\n\n"
+                    )
+                else:
+                    status_section = "✨ <b>Welcome!</b> Ready to plan your day? 🚀\n\n"
 
                 dashboard_text = (
                     "💎 <b>𝗠𝗘𝗡𝗧𝗢𝗥𝗔 𝗣𝗥𝗘𝗠𝗜𝗨𝗠</b>\n"
@@ -5285,9 +5295,7 @@ async def mentorship(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"👤 <b>Student:</b> {student.get('name')}\n"
                     f"🎯 <b>Target:</b> {student.get('exam_target', 'JEE/NEET')}\n"
                     "──────────────────\n\n"
-                    "📊 <b>𝗧𝗢𝗗𝗔𝗬'𝗦 𝗦𝗧𝗔𝗧𝗨𝗦</b>\n"
-                    f"✅ {done_count} Completed | ⏳ {pending_count} Pending\n"
-                    f"📍 <i>{active_task_str}</i>\n\n"
+                    f"{status_section}"
                     "🚀 <b>𝗤𝗨𝗜𝗖𝗞 𝗔𝗖𝗧𝗜𝗢𝗡𝗦</b>\n"
                     "🔵 <b>Ask Doubt</b> — Instant Help\n"
                     "🟢 <b>Daily Scheduler</b> — Today's Plan\n"
@@ -5297,14 +5305,8 @@ async def mentorship(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "──────────────────"
                 )
                 
-                await cleanup_all_transient(uid, context)
-                
-                msg_target = update.message if update.message else update.callback_query.message
-                await msg_target.reply_text(
-                    dashboard_text,
-                    parse_mode="HTML",
-                    reply_markup=ReplyKeyboardMarkup(MENTORSHIP_TABS_KB, resize_keyboard=True)
-                )
+                # Use wizard_step for the Dashboard itself to prevent duplicates
+                await wizard_step(update, context, dashboard_text, kb=MENTORSHIP_TABS_KB, parse_mode="HTML")
             else:
                 await update.message.reply_text("⏳ Aapki registration processing mein hai.\n\nMentor jald hi approve karenge. Tab tak AI Doubt Solver use karein.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True))
             return
@@ -5350,12 +5352,13 @@ async def finish_registration_and_ask_first_timetable(update: Update, uid: int):
     target_dt = now + timedelta(days=days_to_add)
     target_day = target_dt.strftime("%A")
     
-    await update.message.reply_text(
+    msg = await update.message.reply_text(
         f"✅ Registration Complete!\n\n"
         f"Ab {target_day} ({target_dt.strftime('%d %b')}) ka timetable bhejiye.\n"
         "Example: Physics 9 am, Chemistry 11 am. Agar class nahi hai toh 'Off'.",
         reply_markup=ReplyKeyboardMarkup([["Off"]], resize_keyboard=True)
     )
+    await track_transient_msg(uid, msg.message_id)
     temp["timetable_target_date"] = target_dt.strftime('%d/%m/%Y')
     temp["timetable_target_day"] = target_day
     save_mentorship_temp(uid, temp)
@@ -7748,10 +7751,11 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "parent_verification_requested_at": None,
                 "parent_language": "English"
             })
-            await update.message.reply_text(
+            msg = await update.message.reply_text(
                 "✅ Parent verification skip kar di gayi hai. Aapka dashboard active hai! 🚀",
                 reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True)
             )
+            await track_transient_msg(uid, msg.message_id) # Track for cleanup
             await mentorship(update, context)
         return
 
