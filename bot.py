@@ -125,10 +125,10 @@ MENTORSHIP_CHECK_SECONDS = 60
 PLANNER_MODEL = os.getenv("MENTORSHIP_MODEL", MODEL_HAIKU)
 
 MENTORSHIP_DASHBOARD_KB = [
-    ["Daily Scheduler", "Backlogs"],
-    ["Show My Self-Study Planner", "Others"],
+    ["🔵 Ask Doubt", "🟢 Daily Scheduler"],
+    ["🟠 Backlogs", "🟣 My Planner"],
     ["✨ Wizard Refresh"],
-    ["Back", "Ask Doubt"]
+    ["⬅️ Back"]
 ]
 
 SCHEDULER_SUBJECT_OPTIONS = [
@@ -158,10 +158,10 @@ BACKLOGS_MENU = [["Check Backlogs", "Add Backlogs"], ["Back", "Ask Doubt"]]
 
 # Integrated Two-Tab Mentorship UI
 MENTORSHIP_TABS_KB = [
-    ["Daily Scheduler", "Backlogs Coverage"],
-    ["Show My Self-Study Planner"],
+    ["🔵 Ask Doubt", "🟢 Daily Scheduler"],
+    ["🟠 Backlogs Coverage", "🟣 My Planner"],
     ["✨ Wizard Refresh"],
-    ["Back", "Ask Doubt"]
+    ["⬅️ Back"]
 ]
 
 TAB1_BACKLOG_OPTS_KB = [
@@ -2748,43 +2748,52 @@ def count_recent_medical_leaves(student_id: str, days: int = 5) -> int:
     put_conn(c)
     return int(row["cnt"] if row else 0)
 
-def upsert_test_week(student_id: str, week_start_date, fields: Dict[str, Any]) -> Dict[str, Any]:
-    c = db(); cur = db_cursor(c)
-    cur.execute("SELECT * FROM test_weeks WHERE student_id=%s AND week_start_date=%s", (student_id, week_start_date))
-    row = cur.fetchone()
-    if row:
-        ks = list(fields.keys())
-        vs = [fields[k] for k in ks]
-        cur.execute(
-            f"UPDATE test_weeks SET {', '.join([k+'=%s' for k in ks])} WHERE student_id=%s AND week_start_date=%s RETURNING *",
-            vs + [student_id, week_start_date],
-        )
-    else:
-        payload = {"student_id": student_id, "week_start_date": week_start_date}
-        payload.update(fields)
-        cols = list(payload.keys())
-        vals = [payload[k] for k in cols]
-        cur.execute(
-            f"INSERT INTO test_weeks ({', '.join(cols)}) VALUES ({', '.join(['%s'] * len(cols))}) RETURNING *",
-            vals,
-        )
-    out = cur.fetchone()
-    c.commit(); put_conn(c)
-    return dict(out)
+def update_test_week(student_id: str, week_start_date, fields: Dict[str, Any]) -> Dict[str, Any]:
+    c = db()
+    try:
+        cur = db_cursor(c)
+        cur.execute("SELECT * FROM test_weeks WHERE student_id=%s AND week_start_date=%s", (student_id, week_start_date))
+        row = cur.fetchone()
+        if row:
+            ks = list(fields.keys())
+            vs = [fields[k] for k in ks]
+            cur.execute(
+                f"UPDATE test_weeks SET {', '.join([k+'=%s' for k in ks])} WHERE student_id=%s AND week_start_date=%s RETURNING *",
+                vs + [student_id, week_start_date],
+            )
+        else:
+            payload = {"student_id": student_id, "week_start_date": week_start_date}
+            payload.update(fields)
+            cols = list(payload.keys())
+            vals = [payload[k] for k in cols]
+            cur.execute(
+                f"INSERT INTO test_weeks ({', '.join(cols)}) VALUES ({', '.join(['%s'] * len(cols))}) RETURNING *",
+                vals,
+            )
+        out = cur.fetchone()
+        c.commit()
+        return dict(out)
+    finally:
+        put_conn(c)
 
 def get_test_week(student_id: str, week_start_date) -> Optional[Dict[str, Any]]:
-    c = db(); cur = db_cursor(c)
-    cur.execute("SELECT * FROM test_weeks WHERE student_id=%s AND week_start_date=%s", (student_id, week_start_date))
-    row = cur.fetchone()
-    put_conn(c)
-    return dict(row) if row else None
+    c = db()
+    try:
+        cur = db_cursor(c)
+        cur.execute("SELECT * FROM test_weeks WHERE student_id=%s AND week_start_date=%s", (student_id, week_start_date))
+        row = cur.fetchone()
+        return dict(row) if row else None
+    finally:
+        put_conn(c)
 
 def get_approved_students() -> List[Dict[str, Any]]:
-    c = db(); cur = db_cursor(c)
-    cur.execute("SELECT * FROM students WHERE is_approved=true ORDER BY created_at")
-    rows = [dict(r) for r in cur.fetchall()]
-    put_conn(c)
-    return rows
+    c = db()
+    try:
+        cur = db_cursor(c)
+        cur.execute("SELECT * FROM students WHERE is_approved=true")
+        return [dict(r) for r in cur.fetchall()]
+    finally:
+        put_conn(c)
 
 def parse_slot_text(text: str) -> List[Dict[str, Any]]:
     """
@@ -5001,45 +5010,47 @@ async def run_mentorship_scheduler(bot):
                         markers[hw2_key] = True
 
                 # Live Task Timer Updates
-                c_timer = db(); cur_timer = db_cursor(c_timer)
-                cur_timer.execute("SELECT * FROM tasks WHERE student_id=%s AND status='in_progress'", (student["id"],))
-                active_tasks = cur_timer.fetchall()
-                for t in active_tasks:
-                    try:
-                        if t.get("is_paused"):
-                            p_at = t["paused_at"]
-                            if p_at:
-                                if p_at.tzinfo is None: p_at = p_at.replace(tzinfo=timezone.utc).astimezone(IST)
-                                else: p_at = p_at.astimezone(IST)
-                                
-                                if (now_dt - p_at).total_seconds() / 60 >= 10:
-                                    cur_timer.execute("UPDATE tasks SET is_paused=false, updated_at=now() WHERE id=%s", (t["id"],))
-                                    c_timer.commit()
-                                    await bot.send_message(chat_id=int(student["telegram_id"]), text=f"⏰ 10 minute break over! <b>{t['subject']}</b> task resume ho raha hai.", parse_mode="HTML")
-                            continue
-                        
-                        est_end = t["estimated_end_time"]
-                        if est_end:
-                            if est_end.tzinfo is None: est_end = IST.localize(est_end)
-                            rem = int((est_end - now_dt).total_seconds() / 60)
+                try:
+                    c_timer = db(); cur_timer = db_cursor(c_timer)
+                    cur_timer.execute("SELECT * FROM tasks WHERE student_id=%s AND status='in_progress'", (student["id"],))
+                    active_tasks = cur_timer.fetchall()
+                    for t in active_tasks:
+                        try:
+                            if t.get("is_paused"):
+                                p_at = t["paused_at"]
+                                if p_at:
+                                    if p_at.tzinfo is None: p_at = p_at.replace(tzinfo=timezone.utc).astimezone(IST)
+                                    else: p_at = p_at.astimezone(IST)
+                                    
+                                    if (now_dt - p_at).total_seconds() / 60 >= 10:
+                                        cur_timer.execute("UPDATE tasks SET is_paused=false, updated_at=now() WHERE id=%s", (t["id"],))
+                                        c_timer.commit()
+                                        await bot.send_message(chat_id=int(student["telegram_id"]), text=f"⏰ 10 minute break over! <b>{t['subject']}</b> task resume ho raha hai.", parse_mode="HTML")
+                                continue
                             
-                            # Force update message every minute
-                            if t.get("timer_message_id"):
-                                try:
-                                    kb = [[InlineKeyboardButton("✅ Done Early", callback_data=f"m_done_{t['id']}")], [InlineKeyboardButton("⏸ Pause (10m)", callback_data=f"m_pause_{t['id']}"), InlineKeyboardButton("⏳ Extend (15m)", callback_data=f"m_ext_{t['id']}")] ]
-                                    msg_text = f"🚀 <b>TASK IN PROGRESS</b>\n━━━━━━━━━━━━━━━━━━━━\n\n📖 <b>Subject:</b> {t['subject']}\n📝 <b>Task:</b> {t['description']}\n\n⏱ <b>Time Remaining:</b> {max(0, rem)} mins\n🏁 <b>Target End:</b> {est_end.strftime('%I:%M %p')}"
-                                    await bot.edit_message_text(chat_id=int(student["telegram_id"]), message_id=t["timer_message_id"], text=msg_text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
-                                except: pass
+                            est_end = t["estimated_end_time"]
+                            if est_end:
+                                if est_end.tzinfo is None: est_end = IST.localize(est_end)
+                                rem = int((est_end - now_dt).total_seconds() / 60)
+                                
+                                # Force update message every minute
+                                if t.get("timer_message_id"):
+                                    try:
+                                        kb = [[InlineKeyboardButton("✅ Done Early", callback_data=f"m_done_{t['id']}")], [InlineKeyboardButton("⏸ Pause (10m)", callback_data=f"m_pause_{t['id']}"), InlineKeyboardButton("⏳ Extend (15m)", callback_data=f"m_ext_{t['id']}")] ]
+                                        msg_text = f"🚀 <b>TASK IN PROGRESS</b>\n━━━━━━━━━━━━━━━━━━━━\n\n📖 <b>Subject:</b> {t['subject']}\n📝 <b>Task:</b> {t['description']}\n\n⏱ <b>Time Remaining:</b> {max(0, rem)} mins\n🏁 <b>Target End:</b> {est_end.strftime('%I:%M %p')}"
+                                        await bot.edit_message_text(chat_id=int(student["telegram_id"]), message_id=t["timer_message_id"], text=msg_text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
+                                    except: pass
 
-                            if rem <= 0:
-                                cur_timer.execute("UPDATE tasks SET status='awaiting_status', updated_at=now() WHERE id=%s", (t["id"],))
-                                c_timer.commit()
-                                await bot.send_message(chat_id=int(student["telegram_id"]), text=f"🔔 <b>Time's up for:</b> {t['subject']}\n\nKya aapne ye poora kar liya?", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Yes, Done", callback_data=f"m_done_{t['id']}")],[InlineKeyboardButton("⏳ No, Extend 15m", callback_data=f"m_ext_{t['id']}")] ]), parse_mode="HTML")
-                                try: await bot.unpin_chat_message(chat_id=int(student["telegram_id"]), message_id=t["timer_message_id"])
-                                except: pass
-                    except Exception as te:
-                        logger.error(f"Error updating task {t.get('id')}: {te}")
-                put_conn(c_timer)
+                                if rem <= 0:
+                                    cur_timer.execute("UPDATE tasks SET status='awaiting_status', updated_at=now() WHERE id=%s", (t["id"],))
+                                    c_timer.commit()
+                                    await bot.send_message(chat_id=int(student["telegram_id"]), text=f"🔔 <b>Time's up for:</b> {t['subject']}\n\nKya aapne ye poora kar liya?", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Yes, Done", callback_data=f"m_done_{t['id']}")],[InlineKeyboardButton("⏳ No, Extend 15m", callback_data=f"m_ext_{t['id']}")] ]), parse_mode="HTML")
+                                    try: await bot.unpin_chat_message(chat_id=int(student["telegram_id"]), message_id=t["timer_message_id"])
+                                    except: pass
+                        except Exception as te:
+                            logger.error(f"Error updating task {t.get('id')}: {te}")
+                finally:
+                    put_conn(c_timer)
 
                 # Manual Scheduler Task Follow-ups
                 today_tasks = get_student_tasks(student["id"], scheduled_date=now_dt.date())
@@ -5251,26 +5262,36 @@ async def mentorship(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if student:
             if student.get("is_approved"):
-                upd_user(uid, {"step": "mentor_tab_selection"})
+                # Fetch Live Status for Dashboard
+                today = today_ist_date()
+                tasks = get_student_tasks(student["id"], scheduled_date=today)
+                done_count = sum(1 for t in tasks if t["status"] == "done")
+                pending_count = sum(1 for t in tasks if t["status"] != "done")
                 
-                # Fetch more details for personalization
-                batch = student.get("batch_name", "Regular")
-                exam = student.get("exam_target", "JEE/NEET")
-                
+                # Active Task Info
+                active_task_str = "No active task"
+                active_task = next((t for t in tasks if t["status"] == "in_progress"), None)
+                if active_task:
+                    active_task_str = f"🔥 {active_task['subject']}: {active_task['description'][:20]}..."
+                elif pending_count > 0:
+                    active_task_str = "Ready to start next task? 🚀"
+
                 dashboard_text = (
-                    "✨ *MY PERSONAL MENTOR* ✨\n"
-                    "━━━━━━━━━━━━━━━━━━━━\n\n"
-                    f"👤 *Student:* {student.get('name')}\n"
-                    f"🎯 *Target:* {exam}\n"
-                    f"📦 *Batch:* {batch}\n\n"
-                    "━━━━━━━━━━━━━━━━━━━━\n\n"
-                    "Select a Tab to manage your preparation:\n\n"
-                    "❓ *Ask Doubt* — Post your questions\n"
-                    "📚 *Backlogs Coverage* — Cover old topics\n"
-                    "📅 *Daily Study Planner* — AI-generated schedule\n"
-                    "📝 *Daily Scheduler* — Manual sequential plan\n"
-                    "📋 *Show My Planner* — Check today's tasks\n\n"
-                    "✨ *Wizard Refresh* — Clean up chat clutter"
+                    "💎 <b>𝗠𝗘𝗡𝗧𝗢𝗥𝗔 𝗣𝗥𝗘𝗠𝗜𝗨𝗠</b>\n"
+                    "──────────────────\n"
+                    f"👤 <b>Student:</b> {student.get('name')}\n"
+                    f"🎯 <b>Target:</b> {student.get('exam_target', 'JEE/NEET')}\n"
+                    "──────────────────\n\n"
+                    "📊 <b>𝗧𝗢𝗗𝗔𝗬'𝗦 𝗦𝗧𝗔𝗧𝗨𝗦</b>\n"
+                    f"✅ {done_count} Completed | ⏳ {pending_count} Pending\n"
+                    f"📍 <i>{active_task_str}</i>\n\n"
+                    "🚀 <b>𝗤𝗨𝗜𝗖𝗞 𝗔𝗖𝗧𝗜𝗢𝗡𝗦</b>\n"
+                    "🔵 <b>Ask Doubt</b> — Instant Help\n"
+                    "🟢 <b>Daily Scheduler</b> — Today's Plan\n"
+                    "🟠 <b>Backlogs</b> — Cover Pending\n"
+                    "🟣 <b>My Planner</b> — View Schedule\n\n"
+                    "✨ <i>Wizard Refresh — Clean History</i>\n"
+                    "──────────────────"
                 )
                 
                 await cleanup_all_transient(uid, context)
@@ -5748,30 +5769,30 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         return True
 
     if step == "mentor_tab_selection":
-        if text == "Ask Doubt":
+        if text in {"Ask Doubt", "🔵 Ask Doubt"}:
             upd_user(uid, {"step": "subject"})
             await update.message.reply_text("Select Subject:", reply_markup=ReplyKeyboardMarkup(SUBJECT_OPTIONS, resize_keyboard=True))
-        elif text in {"Backlogs", "Backlogs Coverage"}:
+        elif text in {"Backlogs", "Backlogs Coverage", "🟠 Backlogs", "🟠 Backlogs Coverage"}:
             upd_user(uid, {"step": "mentor_backlog_ready"})
             await update.message.reply_text(
-                "📚 *BACKLOGS COVERAGE*\n"
+                "🟠 *BACKLOGS COVERAGE*\n"
                 "━━━━━━━━━━━━━━━━━━━━\n\n"
                 "Purane pending topics ko systematically cover karne ke liye ready hain? ✨\n\n"
                 "Niche diye gaye options mein se chunein:", 
                 reply_markup=ReplyKeyboardMarkup([["Add Backlog", "View Backlogs"], ["Back"]], resize_keyboard=True), 
                 parse_mode="Markdown"
             )
-        elif text == "Daily Scheduler":
+        elif text in {"Daily Scheduler", "🟢 Daily Scheduler"}:
             upd_user(uid, {"step": "mentor_scheduler_subject"})
             temp = get_mentorship_temp(u)
             temp["scheduler_tasks"] = [] # Clear old temp tasks
             save_mentorship_temp(uid, temp)
             await update.message.reply_text(
-                "📝 <b>DAILY SCHEDULER (Manual)</b>\n\nEk-ek karke apne aaj ke tasks add karein.\n\n<b>Subject select karein:</b>",
+                "🟢 <b>DAILY SCHEDULER (Manual)</b>\n\nEk-ek karke apne aaj ke tasks add karein.\n\n<b>Subject select karein:</b>",
                 reply_markup=ReplyKeyboardMarkup(SCHEDULER_SUBJECT_OPTIONS, resize_keyboard=True),
                 parse_mode="HTML"
             )
-        elif text in {"Show My Self-Study Planner", "Show My Planner"}:
+        elif text in {"Show My Self-Study Planner", "Show My Planner", "📋 My Planner", "🟣 My Planner"}:
             tasks = get_student_tasks(student["id"], scheduled_date=today_ist_date())
             if not tasks:
                 await update.message.reply_text("❌ Aapka aaj ka koi plan nahi mil raha. Naya plan banane ke liye 'Daily Scheduler' dabayein.", reply_markup=ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True))
@@ -5796,7 +5817,7 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
                 reply_markup=ReplyKeyboardMarkup(OTHERS_MENU, resize_keyboard=True),
                 parse_mode="HTML"
             )
-        elif text == "Back":
+        elif text in {"Back", "⬅️ Back"}:
             await mentorship(update, context)
         elif text == "✨ Wizard Refresh":
             # 1. Delete user command message
