@@ -4433,10 +4433,22 @@ async def handle_mentorship_callbacks(update: Update, context: ContextTypes.DEFA
         c.commit(); put_conn(c)
         
         await query.answer("Great job! Task complete. 🌟")
-        await query.edit_message_text(f"✅ <b>Task Completed!</b>\n\nMoving to the next task in your schedule...", parse_mode="HTML")
         try: await context.bot.unpin_chat_message(chat_id=uid, message_id=query.message.message_id)
         except: pass
-        await start_next_task(context.bot, student["id"])
+        
+        # Try to start the next task
+        started = await start_next_task(context.bot, student["id"])
+        
+        if started:
+            await query.edit_message_text(f"✅ <b>Task Completed!</b>\n\nMoving to the next task in your schedule...", parse_mode="HTML")
+        else:
+            await query.edit_message_text(
+                f"✅ <b>All Tasks Done!</b>\n\nAaj ke saare tasks pure hue! 🎉\n\nAb aap relax kar sakte hain ya dashboard se naye tasks add kar sakte hain.", 
+                parse_mode="HTML"
+            )
+            # Reset user step so they can use the dashboard buttons normally
+            upd_user(uid, {"step": "mentor_tab_selection"})
+        return
 
     elif data.startswith("m_pause_"):
         task_id = data.split("_")[2]
@@ -4480,7 +4492,7 @@ async def handle_mentorship_callbacks(update: Update, context: ContextTypes.DEFA
         )
         c.commit(); put_conn(c)
         
-        await query.answer("🚀 Backlog Started! Focus on your goal.")
+        await query.answer("🚀 Task Started! Focus on your goal.")
         
         kb = [
             [InlineKeyboardButton("✅ Done Early", callback_data=f"m_done_{task_id}")],
@@ -4489,7 +4501,7 @@ async def handle_mentorship_callbacks(update: Update, context: ContextTypes.DEFA
         ]
         
         msg_text = (
-            f"🚀 <b>BACKLOG TASK STARTED</b>\n"
+            f"🚀 <b>TASK STARTED</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n\n"
             f"📖 <b>Subject:</b> {task['subject']}\n"
             f"📝 <b>Task:</b> {task['description']}\n\n"
@@ -5902,11 +5914,13 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
 
     if step == "mentor_backlog_options":
         if text in {"Add Next Backlogs", "Add Next Backlog"}:
+            await cleanup_all_transient(uid, context)
             upd_user(uid, {"step": "mentor_backlog_ready"})
-            await update.message.reply_text("Ready to add another backlog?", reply_markup=ReplyKeyboardMarkup([["Yes", "No"], ["Back"]], resize_keyboard=True))
+            await wizard_step(update, context, "Ready to add another backlog?", kb=[["Add Backlog", "View Backlogs"], ["Back"]])
         elif text == "View Backlogs":
             await handle_view_backlogs(update, context)
         elif text in {"Back to Dashboard", "Back"}:
+            await cleanup_all_transient(uid, context)
             await mentorship(update, context)
         return True
 
@@ -5924,9 +5938,10 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         save_mentorship_temp(uid, temp)
         
         upd_user(uid, {"step": "mentor_scheduler_task_detail"})
-        await update.message.reply_text(
+        await wizard_step(
+            update, context,
             f"📝 <b>Subject:</b> {text}\n\nAaj isme aap kya karne wale hain? (Ek line mein likhein)\n\n<i>Example: 15 min revision then 45 min questions.</i>",
-            reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True),
+            kb=[["Back"]],
             parse_mode="HTML"
         )
         return True
@@ -5934,23 +5949,24 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
     if step == "mentor_scheduler_task_detail":
         if text == "Back":
             upd_user(uid, {"step": "mentor_scheduler_subject"})
-            await update.message.reply_text("Subject select karein:", reply_markup=ReplyKeyboardMarkup(SCHEDULER_SUBJECT_OPTIONS, resize_keyboard=True))
+            await wizard_step(update, context, "Subject select karein:", kb=SCHEDULER_SUBJECT_OPTIONS)
             return True
         
         temp["scheduler_current_task"]["description"] = text
         save_mentorship_temp(uid, temp)
         
         upd_user(uid, {"step": "mentor_scheduler_time"})
-        await update.message.reply_text(
+        await wizard_step(
+            update, context,
             "⏱️ Is task ke liye kitna time (minutes mein) allot karna hai?\n\nExample: 60",
-            reply_markup=ReplyKeyboardMarkup([["30", "45", "60"], ["90", "120", "Back"]], resize_keyboard=True)
+            kb=[["30", "45", "60"], ["90", "120", "Back"]]
         )
         return True
 
     if step == "mentor_scheduler_time":
         if text == "Back":
             upd_user(uid, {"step": "mentor_scheduler_task_detail"})
-            await update.message.reply_text("Task detail firse likhein:", reply_markup=ReplyKeyboardMarkup([["Back"]], resize_keyboard=True))
+            await wizard_step(update, context, "Task detail firse likhein:", kb=[["Back"]])
             return True
         
         try:
@@ -5959,22 +5975,23 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
             save_mentorship_temp(uid, temp)
             
             upd_user(uid, {"step": "mentor_scheduler_priority"})
-            await update.message.reply_text(
+            await wizard_step(
+                update, context,
                 "🚩 Is task ki priority kya hai?",
-                reply_markup=ReplyKeyboardMarkup(PRIORITY_OPTIONS, resize_keyboard=True)
+                kb=PRIORITY_OPTIONS
             )
         except:
-            await update.message.reply_text("❌ Kripya valid number (minutes) enter karein.")
+            await wizard_step(update, context, "❌ Kripya valid number (minutes) enter karein.")
         return True
 
     if step == "mentor_scheduler_priority":
         if text == "Back":
             upd_user(uid, {"step": "mentor_scheduler_time"})
-            await update.message.reply_text("Minutes enter karein:", reply_markup=ReplyKeyboardMarkup([["30", "45", "60"], ["90", "120", "Back"]], resize_keyboard=True))
+            await wizard_step(update, context, "Minutes enter karein:", kb=[["30", "45", "60"], ["90", "120", "Back"]])
             return True
         
         if text not in ["High", "Medium", "Low"]:
-            await update.message.reply_text("Kripya menu se priority chunein.")
+            await wizard_step(update, context, "Kripya menu se priority chunein.")
             return True
 
         task = temp["scheduler_current_task"]
@@ -5987,9 +6004,10 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         save_mentorship_temp(uid, temp)
         
         upd_user(uid, {"step": "mentor_scheduler_confirm"})
-        await update.message.reply_text(
+        await wizard_step(
+            update, context,
             f"✅ Task saved! Abhi tak aapne {len(temp['scheduler_tasks'])} tasks add kiye hain.\n\nKya aap koi aur subject add karna chahte hain?",
-            reply_markup=ReplyKeyboardMarkup([["Add Next Subject", "Finish & Start Scheduler"], ["Back"]], resize_keyboard=True)
+            kb=[["Add Next Subject", "Finish & Start Scheduler"], ["Back"]]
         )
         return True
 
@@ -6000,19 +6018,20 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
                 temp["scheduler_current_task"] = last_task
                 save_mentorship_temp(uid, temp)
                 upd_user(uid, {"step": "mentor_scheduler_priority"})
-                await update.message.reply_text(
+                await wizard_step(
+                    update, context,
                     f"🚩 <b>Subject:</b> {last_task['subject']}\n\nIs task ki priority firse chunein:",
-                    reply_markup=ReplyKeyboardMarkup(PRIORITY_OPTIONS, resize_keyboard=True),
+                    kb=PRIORITY_OPTIONS,
                     parse_mode="HTML"
                 )
             else:
                 upd_user(uid, {"step": "mentor_scheduler_subject"})
-                await update.message.reply_text("Pehle koi task add karein. Subject select karein:", reply_markup=ReplyKeyboardMarkup(SCHEDULER_SUBJECT_OPTIONS, resize_keyboard=True))
+                await wizard_step(update, context, "Pehle koi task add karein. Subject select karein:", kb=SCHEDULER_SUBJECT_OPTIONS)
             return True
 
         if text == "Add Next Subject":
             upd_user(uid, {"step": "mentor_scheduler_subject"})
-            await update.message.reply_text("Next subject select karein:", reply_markup=ReplyKeyboardMarkup(SCHEDULER_SUBJECT_OPTIONS, resize_keyboard=True))
+            await wizard_step(update, context, "Next subject select karein:", kb=SCHEDULER_SUBJECT_OPTIONS)
             return True
         if text == "Finish & Start Scheduler":
             try:
@@ -6048,6 +6067,7 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
                 logger.info(f"Starting first task for student {student['id']}")
                 await start_next_task(context.bot, student["id"])
                 
+                await cleanup_all_transient(uid, context)
                 await update.message.reply_text(
                     "🚀 <b>Scheduler Ready!</b>\n\nAapka aaj ka plan save ho gaya hai. All the best! 💪",
                     reply_markup=ReplyKeyboardMarkup(MENTORSHIP_DASHBOARD_KB, resize_keyboard=True),
