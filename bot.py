@@ -5262,6 +5262,7 @@ async def mentorship(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if student:
             if student.get("is_approved"):
+                upd_user(uid, {"step": "mentor_tab_selection"})
                 # Fetch Live Status for Dashboard
                 today = today_ist_date()
                 tasks = get_student_tasks(student["id"], scheduled_date=today)
