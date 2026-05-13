@@ -2501,10 +2501,21 @@ def upsert_weekly_timetable_row(student_id: str, day_of_week: str, coaching_slot
     c.commit(); put_conn(c)
 
 
-def get_timer_progress_bar(percent: float, length: int = 10) -> str:
-    """Returns a visual progress bar for the timer."""
-    filled = int(length * percent / 100)
-    bar = "█" * filled + "░" * (length - filled)
+def get_timer_progress_bar(percent):
+    """Returns a visual progress bar with changing colors based on percentage"""
+    total_blocks = 10
+    filled_blocks = int(percent / 10)
+    empty_blocks = total_blocks - filled_blocks
+    
+    # Select color emoji based on percentage
+    if percent < 30:
+        fill_emoji = "⬜" # White/Silver for start
+    elif percent < 70:
+        fill_emoji = "🟦" # Blue for middle
+    else:
+        fill_emoji = "🟩" # Green for near completion
+        
+    bar = (fill_emoji * filled_blocks) + ("░" * empty_blocks)
     return f"|{bar}| {int(percent)}%"
 
 def get_timer_emoji(percent: float) -> str:
@@ -5117,97 +5128,101 @@ async def run_mentorship_scheduler(bot):
                     uid = int(student["telegram_id"])
                     if student.get("on_medical_leave"):
                         continue
+
+                    # 3. LIVE TASK TIMER UPDATES (MOVED TO TOP for performance and accuracy)
+                    c_timer = db(); cur_timer = db_cursor(c_timer)
+                    try:
+                        cur_timer.execute("SELECT * FROM tasks WHERE student_id=%s AND status='in_progress'", (student["id"],))
+                        active_tasks = cur_timer.fetchall()
+                        for t in active_tasks:
+                            # Re-verify status and is_paused to prevent race conditions
+                            # Read est_end and start_t first so they're available everywhere
+                            est_end = t["estimated_end_time"]
+                            start_t = t["start_time"]
+                            if est_end and est_end.tzinfo is None: est_end = est_end.replace(tzinfo=IST)
+                            if start_t and start_t.tzinfo is None: start_t = start_t.replace(tzinfo=IST)
+
+                            if t.get("is_paused"):
+                                p_at = t.get("paused_at")
+                                if p_at:
+                                    if p_at.tzinfo is None: p_at = p_at.replace(tzinfo=IST)
+                                    if (now_dt - p_at).total_seconds() / 60 >= 10:
+                                        cur_timer.execute("UPDATE tasks SET is_paused=false, updated_at=now() WHERE id=%s", (t["id"],))
+                                        c_timer.commit()
+                                        m = await bot.send_message(chat_id=uid, text=f"⏰ Break over! <b>{t['subject']}</b> task resume ho raha hai. Timer niche update ho raha hai...", parse_mode="HTML")
+                                        track_msg(uid, m)
+                                        # Trigger immediate update of the timer message
+                                        try:
+                                            rem_r = int((est_end - now_dt).total_seconds() / 60) if est_end else 0
+                                            pct_r = 0
+                                            if start_t and est_end and est_end > start_t:
+                                                total_dur_r = (est_end - start_t).total_seconds()
+                                                elapsed_r = (now_dt - start_t).total_seconds()
+                                                pct_r = min(100, max(0, (elapsed_r / total_dur_r) * 100))
+                                            prog_bar_r = get_timer_progress_bar(pct_r)
+                                            clock_emoji_r = get_timer_emoji(pct_r)
+                                            kb_r = [[InlineKeyboardButton("✅ Done Early", callback_data=f"m_done_{t['id']}")], [InlineKeyboardButton("⏸ Pause (10m)", callback_data=f"m_pause_{t['id']}"), InlineKeyboardButton("⏳ Extend (15m)", callback_data=f"m_ext_{t['id']}")] ]
+                                            msg_r = (
+                                                f"{clock_emoji_r} <b>TASK IN PROGRESS</b>\n"
+                                                f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                                                f"📖 <b>Subject:</b> {t['subject']}\n"
+                                                f"📝 <b>Task:</b> {t['description']}\n\n"
+                                                f"⏱ <b>Time Remaining:</b> {rem_r} mins\n"
+                                                f"📊 <b>Progress:</b> <code>{prog_bar_r}</code>\n"
+                                                f"🏁 <b>Target End:</b> {est_end.strftime('%I:%M %p') if est_end else 'N/A'}"
+                                            )
+                                            if t.get("timer_message_id"):
+                                                await bot.edit_message_text(chat_id=uid, message_id=t["timer_message_id"], text=msg_r, reply_markup=InlineKeyboardMarkup(kb_r), parse_mode="HTML")
+                                        except Exception as e_res:
+                                            if "message is not modified" not in str(e_res).lower():
+                                                logger.warning(f"Resume timer edit failed for task {t['id']}: {e_res}")
+                                continue
+                            
+                            # est_end and start_t are already read at the top of the loop
+                            if est_end:
+                                rem = int((est_end - now_dt).total_seconds() / 60)
+                                
+                                # Calculate progress percentage
+                                percent = 0
+                                if start_t and est_end > start_t:
+                                    total_dur = (est_end - start_t).total_seconds()
+                                    elapsed = (now_dt - start_t).total_seconds()
+                                    percent = min(100, max(0, (elapsed / total_dur) * 100))
+                                
+                                if rem <= 0:
+                                    cur_timer.execute("UPDATE tasks SET status='awaiting_status', updated_at=now() WHERE id=%s", (t["id"],))
+                                    c_timer.commit()
+                                    m = await bot.send_message(chat_id=uid, text=f"🔔 <b>Time's up for:</b> {t['subject']}\n\nPoora kar liya?", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Yes", callback_data=f"m_done_{t['id']}")],[InlineKeyboardButton("⏳ No, Extend 15m", callback_data=f"m_ext_{t['id']}")] ]), parse_mode="HTML")
+                                    track_msg(uid, m)
+                                    try: await bot.unpin_chat_message(chat_id=uid, message_id=t["timer_message_id"])
+                                    except: pass
+                                else:
+                                    if not t.get("timer_message_id"):
+                                        logger.warning(f"Task {t['id']} has no timer_message_id — skipping edit")
+                                    else:
+                                        try:
+                                            prog_bar = get_timer_progress_bar(percent)
+                                            clock_emoji = get_timer_emoji(percent)
+                                            kb = [[InlineKeyboardButton("✅ Done Early", callback_data=f"m_done_{t['id']}")], [InlineKeyboardButton("⏸ Pause (10m)", callback_data=f"m_pause_{t['id']}"), InlineKeyboardButton("⏳ Extend (15m)", callback_data=f"m_ext_{t['id']}")] ]
+                                            msg_text = (
+                                                f"{clock_emoji} <b>TASK IN PROGRESS</b>\n"
+                                                f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                                                f"📖 <b>Subject:</b> {t['subject']}\n"
+                                                f"📝 <b>Task:</b> {t['description']}\n\n"
+                                                f"⏱ <b>Time Remaining:</b> {rem} mins\n"
+                                                f"📊 <b>Progress:</b> <code>{prog_bar}</code>\n"
+                                                f"🏁 <b>Target End:</b> {est_end.strftime('%I:%M %p')}"
+                                            )
+                                            await bot.edit_message_text(chat_id=uid, message_id=t["timer_message_id"], text=msg_text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
+                                            logger.info(f"✅ Timer updated: task {t['id']} rem={rem}m pct={percent:.0f}%")
+                                        except Exception as e_edit2:
+                                            if "message is not modified" not in str(e_edit2).lower():
+                                                logger.warning(f"Timer edit2 failed for task {t['id']}: {e_edit2}")
+                    finally:
+                        put_conn(c_timer)
+
                     await process_pending_rollover(student)
                     await process_backlog_delivery(bot, student)
-
-                    # 3. LIVE TASK TIMER UPDATES (MOVED UP to prevent skip on Off days)
-                    c_timer = db(); cur_timer = db_cursor(c_timer)
-                    cur_timer.execute("SELECT * FROM tasks WHERE student_id=%s AND status='in_progress'", (student["id"],))
-                    active_tasks = cur_timer.fetchall()
-                    for t in active_tasks:
-                        # Read est_end and start_t first so they're available everywhere
-                        est_end = t["estimated_end_time"]
-                        start_t = t["start_time"]
-                        if est_end and est_end.tzinfo is None: est_end = est_end.replace(tzinfo=IST)
-                        if start_t and start_t.tzinfo is None: start_t = start_t.replace(tzinfo=IST)
-
-                        if t.get("is_paused"):
-                            p_at = t.get("paused_at")
-                            if p_at:
-                                if p_at.tzinfo is None: p_at = p_at.replace(tzinfo=IST)
-                                if (now_dt - p_at).total_seconds() / 60 >= 10:
-                                    cur_timer.execute("UPDATE tasks SET is_paused=false, updated_at=now() WHERE id=%s", (t["id"],))
-                                    c_timer.commit()
-                                    m = await bot.send_message(chat_id=uid, text=f"⏰ Break over! <b>{t['subject']}</b> task resume ho raha hai. Timer niche update ho raha hai...", parse_mode="HTML")
-                                    track_msg(uid, m)
-                                    # Trigger immediate update of the timer message
-                                    try:
-                                        rem_r = int((est_end - now_dt).total_seconds() / 60) if est_end else 0
-                                        pct_r = 0
-                                        if start_t and est_end and est_end > start_t:
-                                            total_dur_r = (est_end - start_t).total_seconds()
-                                            elapsed_r = (now_dt - start_t).total_seconds()
-                                            pct_r = min(100, max(0, (elapsed_r / total_dur_r) * 100))
-                                        prog_bar_r = get_timer_progress_bar(pct_r)
-                                        clock_emoji_r = get_timer_emoji(pct_r)
-                                        kb_r = [[InlineKeyboardButton("✅ Done Early", callback_data=f"m_done_{t['id']}")], [InlineKeyboardButton("⏸ Pause (10m)", callback_data=f"m_pause_{t['id']}"), InlineKeyboardButton("⏳ Extend (15m)", callback_data=f"m_ext_{t['id']}")] ]
-                                        msg_r = (
-                                            f"{clock_emoji_r} <b>TASK IN PROGRESS</b>\n"
-                                            f"━━━━━━━━━━━━━━━━━━━━\n\n"
-                                            f"📖 <b>Subject:</b> {t['subject']}\n"
-                                            f"📝 <b>Task:</b> {t['description']}\n\n"
-                                            f"⏱ <b>Time Remaining:</b> {rem_r} mins\n"
-                                            f"📊 <b>Progress:</b> <code>{prog_bar_r}</code>\n"
-                                            f"🏁 <b>Target End:</b> {est_end.strftime('%I:%M %p') if est_end else 'N/A'}"
-                                        )
-                                        if t.get("timer_message_id"):
-                                            await bot.edit_message_text(chat_id=uid, message_id=t["timer_message_id"], text=msg_r, reply_markup=InlineKeyboardMarkup(kb_r), parse_mode="HTML")
-                                    except Exception as e_res:
-                                        if "message is not modified" not in str(e_res).lower():
-                                            logger.warning(f"Resume timer edit failed for task {t['id']}: {e_res}")
-                            continue
-                        
-                        # est_end and start_t are already read at the top of the loop
-                        if est_end:
-                            rem = int((est_end - now_dt).total_seconds() / 60)
-                            
-                            # Calculate progress percentage
-                            percent = 0
-                            if start_t and est_end > start_t:
-                                total_dur = (est_end - start_t).total_seconds()
-                                elapsed = (now_dt - start_t).total_seconds()
-                                percent = min(100, max(0, (elapsed / total_dur) * 100))
-                            
-                            if rem <= 0:
-                                cur_timer.execute("UPDATE tasks SET status='awaiting_status', updated_at=now() WHERE id=%s", (t["id"],))
-                                c_timer.commit()
-                                m = await bot.send_message(chat_id=uid, text=f"🔔 <b>Time's up for:</b> {t['subject']}\n\nPoora kar liya?", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Yes", callback_data=f"m_done_{t['id']}")],[InlineKeyboardButton("⏳ No, Extend 15m", callback_data=f"m_ext_{t['id']}")] ]), parse_mode="HTML")
-                                track_msg(uid, m)
-                                try: await bot.unpin_chat_message(chat_id=uid, message_id=t["timer_message_id"])
-                                except: pass
-                            else:
-                                if not t.get("timer_message_id"):
-                                    logger.warning(f"Task {t['id']} has no timer_message_id — skipping edit")
-                                else:
-                                    try:
-                                        prog_bar = get_timer_progress_bar(percent)
-                                        clock_emoji = get_timer_emoji(percent)
-                                        kb = [[InlineKeyboardButton("✅ Done Early", callback_data=f"m_done_{t['id']}")], [InlineKeyboardButton("⏸ Pause (10m)", callback_data=f"m_pause_{t['id']}"), InlineKeyboardButton("⏳ Extend (15m)", callback_data=f"m_ext_{t['id']}")] ]
-                                        msg_text = (
-                                            f"{clock_emoji} <b>TASK IN PROGRESS</b>\n"
-                                            f"━━━━━━━━━━━━━━━━━━━━\n\n"
-                                            f"📖 <b>Subject:</b> {t['subject']}\n"
-                                            f"📝 <b>Task:</b> {t['description']}\n\n"
-                                            f"⏱ <b>Time Remaining:</b> {rem} mins\n"
-                                            f"📊 <b>Progress:</b> <code>{prog_bar}</code>\n"
-                                            f"🏁 <b>Target End:</b> {est_end.strftime('%I:%M %p')}"
-                                        )
-                                        await bot.edit_message_text(chat_id=uid, message_id=t["timer_message_id"], text=msg_text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
-                                        logger.info(f"✅ Timer updated: task {t['id']} rem={rem}m pct={percent:.0f}%")
-                                    except Exception as e_edit2:
-                                        if "message is not modified" not in str(e_edit2).lower():
-                                            logger.warning(f"Timer edit2 failed for task {t['id']}: {e_edit2}")
-                    put_conn(c_timer)
                     
                     # 1. Parent Verification Timeout
                     if student.get("parent_verification_requested_at"):
