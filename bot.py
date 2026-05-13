@@ -4532,7 +4532,7 @@ async def start_next_task(bot, student_id):
         put_conn(c)
         return False
     
-    now = datetime.now(IST)
+    now = datetime.now(IST).replace(tzinfo=None)
     end_time = now + timedelta(minutes=task["allotted_minutes"])
     
     cur.execute(
@@ -4626,8 +4626,8 @@ async def handle_mentorship_callbacks(update: Update, context: ContextTypes.DEFA
         if task["pause_count"] >= 1:
             await query.answer("⚠️ Aap sirf ek baar pause le sakte hain per task.", show_alert=True)
             put_conn(c); return
-        new_end = task["estimated_end_time"] + timedelta(minutes=10)
-        now_ist = datetime.now(IST)
+        new_end = (task["estimated_end_time"].replace(tzinfo=None) + timedelta(minutes=10))
+        now_ist = datetime.now(IST).replace(tzinfo=None)
         cur.execute("UPDATE tasks SET is_paused=true, paused_at=%s, pause_count=pause_count+1, estimated_end_time=%s WHERE id=%s", (now_ist, new_end, task_id))
         c.commit(); put_conn(c)
         await query.answer("⏸ 10 mins break started.")
@@ -4646,7 +4646,7 @@ async def handle_mentorship_callbacks(update: Update, context: ContextTypes.DEFA
             await query.answer("⚠️ Task complete ho chuka hai.")
             put_conn(c); return
             
-        now = datetime.now(IST)
+        now = datetime.now(IST).replace(tzinfo=None)
         allotted = task.get("allotted_minutes") or 60
         end_time = now + timedelta(minutes=allotted)
         
@@ -4697,7 +4697,7 @@ async def handle_mentorship_callbacks(update: Update, context: ContextTypes.DEFA
         if task["extension_count"] >= 2:
             await query.answer("⚠️ Max 2 extensions allowed.", show_alert=True)
             put_conn(c); return
-        new_end = task["estimated_end_time"] + timedelta(minutes=15)
+        new_end = (task["estimated_end_time"] + timedelta(minutes=15)).replace(tzinfo=None)
         cur.execute("UPDATE tasks SET extension_minutes=extension_minutes+15, extension_count=extension_count+1, estimated_end_time=%s WHERE id=%s", (new_end, task_id))
         
         # Smart Shift: Shift all subsequent pending tasks for today
