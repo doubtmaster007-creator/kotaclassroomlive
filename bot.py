@@ -159,7 +159,7 @@ BACKLOGS_MENU = [["Check Backlogs", "Add Backlogs"], ["Back", "Ask Doubt"]]
 MENTORSHIP_TABS_KB = [
     ["📅 Daily Scheduler", "📚 Backlogs Coverage"],
     ["❓ Ask Doubt", "📋 View Planner"],
-    ["🔙 Back", "🚨 SOS"]
+    ["🏠 Main Menu", "🚨 SOS"]
 ]
 
 TAB1_BACKLOG_OPTS_KB = [
@@ -5854,8 +5854,13 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
                 "📂 <b>OTHERS & UTILITIES</b>\n\nNiche diye gaye additional options mein se chunein:",
                 kb=OTHERS_MENU
             )
-        elif text in {"Back", "🔙 Back"}:
-            await mentorship(update, context)
+        elif text in {"Back", "🔙 Back", "🏠 Main Menu", "Main Menu"}:
+            await cleanup_all_transient(uid, context)
+            upd_user(uid, {"step": "ready_for_new_doubt"})
+            await update.message.reply_text(
+                "Ask Doubt ya My Personal Mentor choose karo.", 
+                reply_markup=ReplyKeyboardMarkup(MENTORSHIP_ENTRY_OPTIONS, resize_keyboard=True)
+            )
         return True
 
 
@@ -7073,7 +7078,7 @@ async def handle_mentorship_message(update: Update, context: ContextTypes.DEFAUL
         return True
 
     if step == "mentor_ready":
-        if text in {"Back", "🔙 Back"}:
+        if text in {"Back", "🔙 Back", "🏠 Main Menu", "Main Menu"}:
             await cleanup_all_transient(uid, context)
             upd_user(uid, {"step": "ready_for_new_doubt"})
             await update.message.reply_text(
