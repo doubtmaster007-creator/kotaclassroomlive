@@ -2119,20 +2119,26 @@ def ensure_user(uid):
 
 def get_user(uid) -> Optional[Dict[str, Any]]:
     c = db(); cur = db_cursor(c)
-    cur.execute("SELECT * FROM users WHERE user_id=%s", (uid,))
-    r = cur.fetchone(); put_conn(c)
-    return dict(r) if r else None
+    try:
+        cur.execute("SELECT * FROM users WHERE user_id=%s", (uid,))
+        r = cur.fetchone()
+        return dict(r) if r else None
+    finally:
+        put_conn(c)
 
 def upd_user(uid, fields: Dict[str, Any]):
     c = db(); cur = db_cursor(c)
-    # Always refresh updated_at on any change
-    fields_copy = dict(fields)
-    fields_copy["updated_at"] = datetime.now(UTC)
-    
-    cols = [f"{k}=%s" for k in fields_copy.keys()]
-    vals = list(fields_copy.values()) + [uid]
-    cur.execute(f"UPDATE users SET {', '.join(cols)} WHERE user_id=%s", vals)
-    c.commit(); put_conn(c)
+    try:
+        # Always refresh updated_at on any change
+        fields_copy = dict(fields)
+        fields_copy["updated_at"] = datetime.now(UTC)
+        
+        cols = [f"{k}=%s" for k in fields_copy.keys()]
+        vals = list(fields_copy.values()) + [uid]
+        cur.execute(f"UPDATE users SET {', '.join(cols)} WHERE user_id=%s", vals)
+        c.commit()
+    finally:
+        put_conn(c)
 
 # --- WIZARD MODE HELPERS ---
 def save_wizard_msg(uid: int, msg_id: int):
@@ -2539,15 +2545,17 @@ def get_weekly_timetable(student_id: str) -> List[Dict[str, Any]]:
 
 def get_weekday_timetable(student_id: str, day_name: str) -> Optional[Dict[str, Any]]:
     c = db(); cur = db_cursor(c)
-    cur.execute("SELECT * FROM weekly_timetable WHERE student_id=%s AND lower(day_of_week)=lower(%s) LIMIT 1", (student_id, day_name))
-    row = cur.fetchone()
-    put_conn(c)
-    if not row:
-        return None
-    data = dict(row)
-    data["coaching_slots"] = data["coaching_slots"] if isinstance(data["coaching_slots"], list) else safe_json_loads(data.get("coaching_slots") or "[]", [])
-    data["free_slots"] = data["free_slots"] if isinstance(data["free_slots"], list) else safe_json_loads(data.get("free_slots") or "[]", [])
-    return data
+    try:
+        cur.execute("SELECT * FROM weekly_timetable WHERE student_id=%s AND lower(day_of_week)=lower(%s) LIMIT 1", (student_id, day_name))
+        row = cur.fetchone()
+        if not row:
+            return None
+        data = dict(row)
+        data["coaching_slots"] = data["coaching_slots"] if isinstance(data["coaching_slots"], list) else safe_json_loads(data.get("coaching_slots") or "[]", [])
+        data["free_slots"] = data["free_slots"] if isinstance(data["free_slots"], list) else safe_json_loads(data.get("free_slots") or "[]", [])
+        return data
+    finally:
+        put_conn(c)
 
 def init_db_schema():
     """Ensure database schema is up-to-date with necessary columns."""
@@ -2661,29 +2669,37 @@ def update_task(task_id: str, fields: Dict[str, Any]):
     ks = list(fields.keys())
     vs = [fields[k] for k in ks]
     c = db(); cur = db_cursor(c)
-    cur.execute(f"UPDATE tasks SET {', '.join([k+'=%s' for k in ks])} WHERE id=%s", vs + [task_id])
-    c.commit(); put_conn(c)
+    try:
+        cur.execute(f"UPDATE tasks SET {', '.join([k+'=%s' for k in ks])} WHERE id=%s", vs + [task_id])
+        c.commit()
+    finally:
+        put_conn(c)
 
 def delete_pending_tasks_for_day(student_id: str, scheduled_date: date):
     c = db(); cur = db_cursor(c)
-    cur.execute("DELETE FROM tasks WHERE student_id=%s AND scheduled_date=%s AND status='pending'", (student_id, scheduled_date))
-    c.commit(); put_conn(c)
+    try:
+        cur.execute("DELETE FROM tasks WHERE student_id=%s AND scheduled_date=%s AND status='pending'", (student_id, scheduled_date))
+        c.commit()
+    finally:
+        put_conn(c)
 
 def get_student_tasks(student_id: str, statuses: Optional[List[str]] = None, scheduled_date=None) -> List[Dict[str, Any]]:
     c = db(); cur = db_cursor(c)
-    query = "SELECT * FROM tasks WHERE student_id=%s"
-    params: List[Any] = [student_id]
-    if statuses:
-        query += " AND status = ANY(%s)"
-        params.append(statuses)
-    if scheduled_date is not None:
-        query += " AND scheduled_date=%s"
-        params.append(scheduled_date)
-    query += " ORDER BY deadline_time NULLS LAST, created_at"
-    cur.execute(query, params)
-    rows = [dict(r) for r in cur.fetchall()]
-    put_conn(c)
-    return rows
+    try:
+        query = "SELECT * FROM tasks WHERE student_id=%s"
+        params: List[Any] = [student_id]
+        if statuses:
+            query += " AND status = ANY(%s)"
+            params.append(statuses)
+        if scheduled_date is not None:
+            query += " AND scheduled_date=%s"
+            params.append(scheduled_date)
+        query += " ORDER BY deadline_time NULLS LAST, created_at"
+        cur.execute(query, params)
+        rows = [dict(r) for r in cur.fetchall()]
+        return rows
+    finally:
+        put_conn(c)
 
 def get_pending_tasks_upto_days(student_id: str, days: int = 3) -> List[Dict[str, Any]]:
     c = db(); cur = db_cursor(c)
@@ -2705,13 +2721,16 @@ def create_backlog(data: Dict[str, Any]) -> Dict[str, Any]:
     cols = list(data.keys()) + ["created_at"]
     vals = [data[k] for k in data.keys()] + [now_iso()]
     c = db(); cur = db_cursor(c)
-    cur.execute(
-        f"INSERT INTO backlogs ({', '.join(cols)}) VALUES ({', '.join(['%s'] * len(cols))}) RETURNING *",
-        vals,
-    )
-    row = cur.fetchone()
-    c.commit(); put_conn(c)
-    return dict(row)
+    try:
+        cur.execute(
+            f"INSERT INTO backlogs ({', '.join(cols)}) VALUES ({', '.join(['%s'] * len(cols))}) RETURNING *",
+            vals,
+        )
+        row = cur.fetchone()
+        c.commit()
+        return dict(row) if row else {}
+    finally:
+        put_conn(c)
 
 def update_backlog(backlog_id: str, fields: Dict[str, Any]):
     if not fields:
@@ -2719,21 +2738,26 @@ def update_backlog(backlog_id: str, fields: Dict[str, Any]):
     ks = list(fields.keys())
     vs = [fields[k] for k in ks]
     c = db(); cur = db_cursor(c)
-    cur.execute(f"UPDATE backlogs SET {', '.join([k+'=%s' for k in ks])} WHERE id=%s", vs + [backlog_id])
-    c.commit(); put_conn(c)
+    try:
+        cur.execute(f"UPDATE backlogs SET {', '.join([k+'=%s' for k in ks])} WHERE id=%s", vs + [backlog_id])
+        c.commit()
+    finally:
+        put_conn(c)
 
 def get_backlogs(student_id: str, statuses: Optional[List[str]] = None) -> List[Dict[str, Any]]:
     c = db(); cur = db_cursor(c)
-    query = "SELECT * FROM backlogs WHERE student_id=%s"
-    params: List[Any] = [student_id]
-    if statuses:
-        query += " AND status = ANY(%s)"
-        params.append(statuses)
-    query += " ORDER BY created_at DESC"
-    cur.execute(query, params)
-    rows = [dict(r) for r in cur.fetchall()]
-    put_conn(c)
-    return rows
+    try:
+        query = "SELECT * FROM backlogs WHERE student_id=%s"
+        params: List[Any] = [student_id]
+        if statuses:
+            query += " AND status = ANY(%s)"
+            params.append(statuses)
+        query += " ORDER BY created_at DESC"
+        cur.execute(query, params)
+        rows = [dict(r) for r in cur.fetchall()]
+        return rows
+    finally:
+        put_conn(c)
 
 def get_backlog(backlog_id) -> Optional[Dict[str, Any]]:
     c = db(); cur = db_cursor(c)
@@ -2880,10 +2904,12 @@ def get_test_week(student_id: str, week_start_date) -> Optional[Dict[str, Any]]:
 
 def get_approved_students() -> List[Dict[str, Any]]:
     c = db(); cur = db_cursor(c)
-    cur.execute("SELECT * FROM students WHERE is_approved=true ORDER BY created_at")
-    rows = [dict(r) for r in cur.fetchall()]
-    put_conn(c)
-    return rows
+    try:
+        cur.execute("SELECT * FROM students WHERE is_approved=true ORDER BY created_at")
+        rows = [dict(r) for r in cur.fetchall()]
+        return rows
+    finally:
+        put_conn(c)
 
 def parse_slot_text(text: str) -> List[Dict[str, Any]]:
     """
