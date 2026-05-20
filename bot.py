@@ -50,16 +50,44 @@ def init_db_pool():
     except Exception as e:
         logger.error(f"❌ Failed to initialize DB Pool: {e}")
 
+class ConnectionWrapper:
+    def __init__(self, raw_conn):
+        self._raw_conn = raw_conn
+        self._returned = False
+
+    def __getattr__(self, name):
+        return getattr(self._raw_conn, name)
+
+    def mark_returned(self):
+        self._returned = True
+
+    def __del__(self):
+        if not self._returned:
+            try:
+                put_conn(self)
+            except Exception:
+                pass
+
 def put_conn(conn):
-    if DB_POOL and conn:
+    if not conn:
+        return
+    if isinstance(conn, ConnectionWrapper):
+        if conn._returned:
+            return
+        conn.mark_returned()
+        raw = conn._raw_conn
+    else:
+        raw = conn
+
+    if DB_POOL and raw:
         try:
-            DB_POOL.putconn(conn)
-        except:
-            try: conn.close()
-            except: pass
-    elif conn:
-        try: conn.close()
-        except: pass
+            DB_POOL.putconn(raw)
+        except Exception:
+            try: raw.close()
+            except Exception: pass
+    elif raw:
+        try: raw.close()
+        except Exception: pass
 MODEL_HAIKU = "claude-haiku-4-5-20251001"
 DB_PATH = os.getenv("DB_PATH", "bot_data.db")
 PYQ_FILE = Path(os.getenv("PYQ_FILE", "pyq_bank.json"))
@@ -1779,9 +1807,9 @@ def db():
 
     try:
         if DB_POOL:
-            return DB_POOL.getconn()
+            return ConnectionWrapper(DB_POOL.getconn())
         conn = psycopg2.connect(target_url)
-        return conn
+        return ConnectionWrapper(conn)
     except Exception as e:
         print(f"❌ Database connection failed!")
         # Log the host and port only (masking credentials)
