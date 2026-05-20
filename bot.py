@@ -58,6 +58,13 @@ class ConnectionWrapper:
     def __getattr__(self, name):
         return getattr(self._raw_conn, name)
 
+    def close(self):
+        if not self._returned:
+            try:
+                put_conn(self)
+            except Exception:
+                pass
+
     def mark_returned(self):
         self._returned = True
 
